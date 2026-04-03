@@ -2,7 +2,9 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'rea
 import { useLocation } from 'react-router-dom';
 import { Search, FolderOpen, FolderClosed, FileText, ChevronRight, ChevronDown, X, Clock, BookOpen, Hash, Layers, ArrowLeft, FolderTree as FolderTreeIcon, Library, CalendarDays, ScrollText } from 'lucide-react';
 import { Tag, type TagColor } from '@/components/primitives/Tag';
+import { TabBar } from '@/components/primitives';
 import { MarkdownRenderer } from '@/components/primitives/MarkdownRenderer';
+import { KnowledgeFeed, KnowledgePipeline, KnowledgeReader } from '@/components/knowledge';
 
 const API = '/api';
 
@@ -318,18 +320,18 @@ function FrontmatterBar({ fm }: { fm: Record<string, unknown> }) {
       {badges.map(b => (
         <Tag key={b.label} label={b.value} color={b.color} size="sm" icon={b.label.startsWith('stage') ? <Layers className="w-3 h-3" /> : undefined} />
       ))}
-      {fm.date && (
+      {fm.date ? (
         <span className="inline-flex items-center gap-1.5 text-[11px] text-text-quaternary">
           <Clock className="w-3 h-3" />
           <span>{String(fm.date)}</span>
         </span>
-      )}
-      {fm.tags && (
+      ) : null}
+      {fm.tags ? (
         <span className="inline-flex items-center gap-1.5 text-[11px] text-text-quaternary">
           <Hash className="w-3 h-3" />
-          <span>{Array.isArray(fm.tags) ? fm.tags.join(', ') : String(fm.tags)}</span>
+          <span>{Array.isArray(fm.tags) ? (fm.tags as string[]).join(', ') : String(fm.tags)}</span>
         </span>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -358,6 +360,7 @@ export default function VaultPage() {
   const [searching, setSearching] = useState(false);
   const [searchTier, setSearchTier] = useState<'idle' | 'fuzzy' | 'fast' | 'enhanced'>('idle');
   const [treeOpen, setTreeOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'feed' | 'pipeline'>('feed');
   const contentRef = useRef<HTMLDivElement>(null);
   const fastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const enhancedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -569,7 +572,33 @@ export default function VaultPage() {
   }, []);
 
   // -----------------------------------------------------------------------
-  // File reading view — immersive, full-width, mobile-first
+  // Knowledge reader — delegates to KnowledgeReader (ContextPanel + FrontmatterEditor)
+  // -----------------------------------------------------------------------
+  if (selectedPath && section === 'knowledge') {
+    return (
+      <div className="h-full flex flex-col bg-bg">
+        <KnowledgeReader
+          path={selectedPath}
+          onBack={goBack}
+          onNavigate={loadFile}
+          onBrowse={() => setTreeOpen(true)}
+        />
+        {treeOpen && (
+          <TreeOverlay
+            tree={filteredTree}
+            selectedPath={selectedPath}
+            onSelect={loadFile}
+            expandedPaths={expandedPaths}
+            onToggle={toggleFolder}
+            onClose={() => setTreeOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // File reading view — immersive, for journal/logs/all sections
   // -----------------------------------------------------------------------
   if (file) {
     return (
@@ -720,12 +749,41 @@ export default function VaultPage() {
             </div>
           )}
 
-          {/* Collections / browse — shown when not searching */}
-          {!isSearching && (
+          {/* Knowledge section: TabBar + Feed/Pipeline */}
+          {section === 'knowledge' && !isSearching && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <TabBar
+                  tabs={[
+                    { id: 'feed', label: 'Feed' },
+                    { id: 'pipeline', label: 'Pipeline' },
+                  ]}
+                  active={activeTab}
+                  onChange={(id) => setActiveTab(id as 'feed' | 'pipeline')}
+                />
+                <button
+                  onClick={() => setTreeOpen(true)}
+                  className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer p-1 -m-1"
+                  style={{ transitionDuration: '80ms' }}
+                >
+                  <FolderTreeIcon className="w-3.5 h-3.5" />
+                  <span>Browse</span>
+                </button>
+              </div>
+              {activeTab === 'feed' ? (
+                <KnowledgeFeed onOpenFile={loadFile} />
+              ) : (
+                <KnowledgePipeline onOpenFile={loadFile} />
+              )}
+            </>
+          )}
+
+          {/* Other sections: existing browse (journal, logs) */}
+          {section !== 'all' && section !== 'knowledge' && !isSearching && (
             <>
               <div className="flex items-center justify-between mb-4">
                 <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
-                  {section === 'all' ? 'Collections' : 'Browse'}
+                  Browse
                 </span>
                 <button
                   onClick={() => setTreeOpen(true)}
@@ -736,42 +794,54 @@ export default function VaultPage() {
                   <span>Browse files</span>
                 </button>
               </div>
+              <div className="rounded-[7px] border border-border-secondary bg-bg-secondary p-3">
+                {filteredTree.length > 0 ? (
+                  <FolderTree
+                    nodes={filteredTree}
+                    selectedPath={selectedPath}
+                    onSelect={loadFile}
+                    expandedPaths={expandedPaths}
+                    onToggle={toggleFolder}
+                  />
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <SectionIcon className="w-8 h-8 text-text-quaternary opacity-15 mb-3" />
+                    <p className="text-[13px] font-serif text-text-quaternary">Loading...</p>
+                  </div>
+                )}
+              </div>
+            </>
+          )}
 
-              {/* Show collection cards for 'all' view, or just the tree trigger for section views */}
-              {section === 'all' ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  {collections.map(c => (
-                    <CollectionCard
-                      key={c.name}
-                      collection={c}
-                      onClick={() => {
-                        setExpandedPaths(prev => new Set([...prev, c.name]));
-                        setTreeOpen(true);
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                /* For section views, show the file tree inline instead of cards */
-                <div className="rounded-[7px] border border-border-secondary bg-bg-secondary p-3">
-                  {filteredTree.length > 0 ? (
-                    <FolderTree
-                      nodes={filteredTree}
-                      selectedPath={selectedPath}
-                      onSelect={loadFile}
-                      expandedPaths={expandedPaths}
-                      onToggle={toggleFolder}
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center justify-center py-12">
-                      <SectionIcon className="w-8 h-8 text-text-quaternary opacity-15 mb-3" />
-                      <p className="text-[13px] font-serif text-text-quaternary">Loading...</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {section === 'all' && collections.length === 0 && (
+          {/* Base /vault route: collection cards */}
+          {section === 'all' && !isSearching && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
+                  Collections
+                </span>
+                <button
+                  onClick={() => setTreeOpen(true)}
+                  className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer p-1 -m-1"
+                  style={{ transitionDuration: '80ms' }}
+                >
+                  <FolderTreeIcon className="w-3.5 h-3.5" />
+                  <span>Browse files</span>
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {collections.map(c => (
+                  <CollectionCard
+                    key={c.name}
+                    collection={c}
+                    onClick={() => {
+                      setExpandedPaths(prev => new Set([...prev, c.name]));
+                      setTreeOpen(true);
+                    }}
+                  />
+                ))}
+              </div>
+              {collections.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20">
                   <Library className="w-10 h-10 text-text-quaternary opacity-15 mb-4" />
                   <p className="text-[14px] font-serif text-text-tertiary">Connecting to vault...</p>
