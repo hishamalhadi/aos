@@ -27,7 +27,7 @@ export function FeedItem({ path, title, stage, collection, isStale, onOpen, onPr
 
   return (
     <div
-      className="group flex items-center gap-2.5 px-3 py-2.5 rounded-[5px] hover:bg-hover transition-colors cursor-pointer"
+      className="group flex items-center gap-3 px-3 py-3 rounded-[5px] hover:bg-hover transition-colors cursor-pointer"
       style={{ transitionDuration: '80ms' }}
       onClick={onOpen}
     >
