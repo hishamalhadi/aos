@@ -26,37 +26,43 @@ export function FeedItem({ path, title, stage, collection, isStale, onOpen, onPr
   const displayName = title || path.split('/').pop()?.replace('.md', '') || path;
 
   return (
-    <div className="group px-4 py-3.5 rounded-[7px] border border-border-secondary hover:border-border-tertiary bg-bg-secondary transition-all cursor-pointer" style={{ transitionDuration: '150ms' }}>
-      <div className="flex items-start gap-3">
-        <FileText className="w-4 h-4 text-text-quaternary shrink-0 mt-1 group-hover:text-accent transition-colors" style={{ transitionDuration: '80ms' }} />
-        <div className="flex-1 min-w-0" onClick={onOpen}>
-          <span className="text-[14px] font-serif font-[500] text-text-secondary group-hover:text-text block truncate leading-tight transition-colors" style={{ transitionDuration: '80ms' }}>
-            {displayName}
-          </span>
-          <div className="flex items-center gap-2 mt-2 flex-wrap">
-            {stage && <Tag label={stageLabels[stage] || `Stage ${stage}`} color={stageColors[stage] || 'gray'} size="sm" />}
-            {collection && <Tag label={collection} color="gray" size="sm" />}
-            {isStale && (
-              <span className="inline-flex items-center gap-1 text-[10px] text-yellow">
-                <AlertTriangle className="w-3 h-3" />
-                <span>Stale</span>
-              </span>
-            )}
-          </div>
-        </div>
-        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" style={{ transitionDuration: '150ms' }}>
-          {nextStage && onPromote && (
-            <button onClick={(e) => { e.stopPropagation(); onPromote(nextStage); }} className="flex items-center gap-1 px-2 h-7 rounded-[5px] text-[11px] font-[510] text-accent bg-accent/10 hover:bg-accent/20 transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }} title={`Promote to ${stageLabels[nextStage]}`}>
-              <ChevronRight className="w-3 h-3" />
-              {stageLabels[nextStage]}
-            </button>
-          )}
-          {onArchive && (
-            <button onClick={(e) => { e.stopPropagation(); onArchive(); }} className="p-1.5 rounded-[5px] text-text-quaternary hover:text-red hover:bg-red/10 transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }} title="Archive">
-              <Archive className="w-3.5 h-3.5" />
-            </button>
-          )}
-        </div>
+    <div
+      className="group flex items-center gap-2.5 px-3 py-2.5 rounded-[5px] hover:bg-hover transition-colors cursor-pointer"
+      style={{ transitionDuration: '80ms' }}
+      onClick={onOpen}
+    >
+      <FileText className="w-3.5 h-3.5 text-text-quaternary shrink-0 group-hover:text-accent transition-colors" style={{ transitionDuration: '80ms' }} />
+      <div className="flex-1 min-w-0 flex items-center gap-2">
+        <span className="text-[13px] font-serif text-text-secondary group-hover:text-text truncate transition-colors" style={{ transitionDuration: '80ms' }}>
+          {displayName}
+        </span>
+        {isStale && <AlertTriangle className="w-3 h-3 text-yellow shrink-0" />}
+      </div>
+      {stage && (
+        <Tag label={stageLabels[stage] || `Stage ${stage}`} color={stageColors[stage] || 'gray'} size="sm" className="shrink-0" />
+      )}
+      {/* Hover actions */}
+      <div className="flex items-center gap-0.5 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" style={{ transitionDuration: '150ms' }}>
+        {nextStage && onPromote && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onPromote(nextStage); }}
+            className="px-1.5 h-5 rounded-xs text-[10px] font-[510] text-accent hover:bg-accent/10 transition-colors cursor-pointer"
+            style={{ transitionDuration: '80ms' }}
+            title={`Promote to ${stageLabels[nextStage]}`}
+          >
+            <ChevronRight className="w-3 h-3" />
+          </button>
+        )}
+        {onArchive && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onArchive(); }}
+            className="p-1 rounded-xs text-text-quaternary hover:text-red transition-colors cursor-pointer"
+            style={{ transitionDuration: '80ms' }}
+            title="Archive"
+          >
+            <Archive className="w-3 h-3" />
+          </button>
+        )}
       </div>
     </div>
   );

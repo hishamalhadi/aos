@@ -675,30 +675,22 @@ export default function VaultPage() {
 
   return (
     <div className="h-full flex flex-col bg-bg">
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[640px] mx-auto px-5 sm:px-8 py-8 sm:py-16">
-          {/* Header */}
-          <div className="mb-6 sm:mb-8">
-            <div className="flex items-center gap-2.5 mb-2">
-              <SectionIcon className="w-5 h-5 text-text-quaternary" />
-              <h1 className="text-[24px] font-serif font-[600] text-text tracking-[-0.02em]">{meta.title}</h1>
-            </div>
-            <p className="text-[14px] font-serif text-text-tertiary leading-[1.6]">
-              {meta.description}
-            </p>
+      {/* Sticky compact header — title + search in one row */}
+      <div className="shrink-0 border-b border-border px-5 sm:px-8 py-3">
+        <div className="max-w-[640px] mx-auto">
+          <div className="flex items-center gap-3 mb-3">
+            <h1 className="text-[16px] font-serif font-[600] text-text tracking-[-0.01em]">{meta.title}</h1>
+            <span className="text-[11px] text-text-quaternary hidden sm:inline">{meta.description}</span>
           </div>
-
-          {/* Search */}
-          <div className="mb-6 sm:mb-8">
-            <div className="flex items-center gap-2.5 px-4 py-3 rounded-[7px] bg-bg-secondary border border-border-secondary transition-colors focus-within:border-border-tertiary" style={{ transitionDuration: '150ms' }}>
-              <Search className="w-4 h-4 text-text-quaternary shrink-0" />
+          <div className="flex items-center gap-2.5 px-3 py-2 rounded-[5px] bg-bg-secondary border border-border-secondary transition-colors focus-within:border-border-tertiary" style={{ transitionDuration: '150ms' }}>
+            <Search className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
               <input
                 ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder={searchPlaceholder}
-                className="flex-1 text-[14px] font-serif bg-transparent text-text placeholder:text-text-quaternary outline-none"
+                className="flex-1 text-[13px] bg-transparent text-text placeholder:text-text-quaternary outline-none"
               />
               {searchQuery ? (
                 <button onClick={() => { setSearchQuery(''); setSearchResults([]); }} className="p-1.5 rounded-xs hover:bg-hover transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }}>
@@ -709,6 +701,10 @@ export default function VaultPage() {
               )}
             </div>
           </div>
+        </div>
+
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-[640px] mx-auto px-5 sm:px-8 py-4">
 
           {/* Search results — progressive: fuzzy → fast → enhanced */}
           {isSearching && (
@@ -752,7 +748,7 @@ export default function VaultPage() {
           {/* Knowledge section: TabBar + Feed/Pipeline */}
           {section === 'knowledge' && !isSearching && (
             <>
-              <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center justify-between mb-5">
                 <TabBar
                   tabs={[
                     { id: 'feed', label: 'Feed' },
@@ -763,7 +759,7 @@ export default function VaultPage() {
                 />
                 <button
                   onClick={() => setTreeOpen(true)}
-                  className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer p-1 -m-1"
+                  className="flex items-center gap-1.5 px-2 h-7 rounded-[5px] text-[11px] text-text-quaternary hover:text-text-tertiary hover:bg-hover transition-colors cursor-pointer"
                   style={{ transitionDuration: '80ms' }}
                 >
                   <FolderTreeIcon className="w-3.5 h-3.5" />
