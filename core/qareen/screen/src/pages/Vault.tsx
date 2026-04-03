@@ -1,12 +1,51 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react';
-import { Search, FolderOpen, FolderClosed, FileText, ChevronRight, ChevronDown, X, Clock, BookOpen, Menu, ArrowLeft, Layers, Hash } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { useLocation } from 'react-router-dom';
+import { Search, FolderOpen, FolderClosed, FileText, ChevronRight, ChevronDown, X, Clock, BookOpen, Hash, Layers, ArrowLeft, FolderTree as FolderTreeIcon, Library, CalendarDays, ScrollText } from 'lucide-react';
 import { Tag, type TagColor } from '@/components/primitives/Tag';
+import { MarkdownRenderer } from '@/components/primitives/MarkdownRenderer';
 
 const API = '/api';
+
+// ---------------------------------------------------------------------------
+// Route → section mapping
+// ---------------------------------------------------------------------------
+
+type VaultSection = 'all' | 'knowledge' | 'journal' | 'logs';
+
+const sectionMeta: Record<VaultSection, { title: string; description: string; icon: typeof Library; collections: string[] }> = {
+  all: {
+    title: 'Vault',
+    description: 'Your collected knowledge, research, and decisions.',
+    icon: Library,
+    collections: [],
+  },
+  knowledge: {
+    title: 'Knowledge',
+    description: 'Research, decisions, expertise, and references.',
+    icon: BookOpen,
+    collections: ['knowledge'],
+  },
+  journal: {
+    title: 'Journal',
+    description: 'Daily logs, weekly reviews, and reflections.',
+    icon: CalendarDays,
+    collections: ['log'],
+  },
+  logs: {
+    title: 'Logs',
+    description: 'Session exports and friction reports.',
+    icon: ScrollText,
+    collections: ['log'],
+  },
+};
+
+function useSectionFromRoute(): VaultSection {
+  const { pathname } = useLocation();
+  if (pathname.startsWith('/vault/knowledge')) return 'knowledge';
+  if (pathname.startsWith('/vault/journal')) return 'journal';
+  if (pathname.startsWith('/vault/logs')) return 'logs';
+  return 'all';
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -14,51 +53,100 @@ const API = '/api';
 
 interface TreeNode { name: string; path: string; type: 'folder' | 'file'; children?: TreeNode[]; count?: number; }
 interface VaultFile { path: string; name: string; title?: string; content: string; body?: string; frontmatter: Record<string, unknown> | null; size_bytes?: number; }
-interface SearchResult { path: string; name: string; snippet?: string; score?: number; collection?: string; }
+interface SearchResult { path: string; name: string; snippet?: string; score?: number; collection?: string; source?: 'fuzzy' | 'fast' | 'enhanced'; }
+interface Collection { name: string; doc_count: number; path?: string; }
 
 // ---------------------------------------------------------------------------
-// Stage metadata
+// Tier 0 — Client-side fuzzy matching on file tree
+// ---------------------------------------------------------------------------
+
+/** Flatten a tree into a list of file paths + names. */
+function flattenTree(nodes: TreeNode[]): { name: string; path: string }[] {
+  const result: { name: string; path: string }[] = [];
+  function walk(items: TreeNode[]) {
+    for (const node of items) {
+      if (node.type === 'file') {
+        result.push({ name: node.name, path: node.path });
+      }
+      if (node.children) walk(node.children);
+    }
+  }
+  walk(nodes);
+  return result;
+}
+
+/** Simple fuzzy match — checks if all query chars appear in order in the target. */
+function fuzzyMatch(query: string, target: string): { match: boolean; score: number } {
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+
+  // Exact substring match is best
+  const substringIdx = t.indexOf(q);
+  if (substringIdx !== -1) {
+    // Boost if match starts at word boundary
+    const atBoundary = substringIdx === 0 || t[substringIdx - 1] === '/' || t[substringIdx - 1] === '-' || t[substringIdx - 1] === ' ';
+    return { match: true, score: atBoundary ? 0.95 : 0.85 };
+  }
+
+  // Subsequence match
+  let qi = 0;
+  let consecutive = 0;
+  let maxConsecutive = 0;
+  for (let ti = 0; ti < t.length && qi < q.length; ti++) {
+    if (t[ti] === q[qi]) {
+      qi++;
+      consecutive++;
+      maxConsecutive = Math.max(maxConsecutive, consecutive);
+    } else {
+      consecutive = 0;
+    }
+  }
+  if (qi < q.length) return { match: false, score: 0 };
+  return { match: true, score: 0.3 + (maxConsecutive / q.length) * 0.4 };
+}
+
+function fuzzySearch(query: string, files: { name: string; path: string }[], limit = 8): SearchResult[] {
+  if (query.length < 2) return [];
+  const scored: { file: { name: string; path: string }; score: number }[] = [];
+  for (const file of files) {
+    const nameMatch = fuzzyMatch(query, file.name.replace('.md', ''));
+    const pathMatch = fuzzyMatch(query, file.path);
+    const best = nameMatch.score >= pathMatch.score ? nameMatch : pathMatch;
+    if (best.match) {
+      scored.push({ file, score: best.score });
+    }
+  }
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit).map(s => ({
+    path: s.file.path,
+    name: s.file.name,
+    score: s.score,
+    collection: s.file.path.split('/')[0],
+    source: 'fuzzy' as const,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Stage / status / type metadata
 // ---------------------------------------------------------------------------
 
 const stageLabels: Record<number, string> = {
-  1: 'Capture',
-  2: 'Triage',
-  3: 'Research',
-  4: 'Synthesis',
-  5: 'Decision',
-  6: 'Expertise',
+  1: 'Capture', 2: 'Triage', 3: 'Research', 4: 'Synthesis', 5: 'Decision', 6: 'Expertise',
 };
 
 const stageColors: Record<number, TagColor> = {
-  1: 'gray',
-  2: 'yellow',
-  3: 'blue',
-  4: 'purple',
-  5: 'green',
-  6: 'orange',
+  1: 'gray', 2: 'yellow', 3: 'blue', 4: 'purple', 5: 'green', 6: 'orange',
 };
 
 const statusColors: Record<string, TagColor> = {
-  active: 'green',
-  draft: 'yellow',
-  review: 'blue',
-  archived: 'gray',
-  done: 'green',
-  blocked: 'red',
-  paused: 'orange',
+  active: 'green', draft: 'yellow', review: 'blue', archived: 'gray',
+  done: 'green', blocked: 'red', paused: 'orange',
 };
 
 const typeColors: Record<string, TagColor> = {
-  capture: 'gray',
-  research: 'blue',
-  synthesis: 'purple',
-  decision: 'green',
-  expertise: 'orange',
-  reference: 'teal',
-  initiative: 'yellow',
-  daily: 'gray',
-  weekly: 'blue',
-  session: 'purple',
+  capture: 'gray', research: 'blue', synthesis: 'purple', decision: 'green',
+  expertise: 'orange', reference: 'teal', initiative: 'yellow',
+  daily: 'gray', weekly: 'blue', session: 'purple',
 };
 
 function tagColorForValue(key: string, value: string): TagColor {
@@ -68,11 +156,26 @@ function tagColorForValue(key: string, value: string): TagColor {
   return 'gray';
 }
 
+const collectionDescriptions: Record<string, string> = {
+  log: 'Daily logs, session exports, weekly reviews',
+  knowledge: 'Research, decisions, expertise, references',
+  skills: 'Skill definitions and protocols',
+  agents: 'Agent definitions — Chief, Steward, Advisor',
+  'aos-docs': 'System documentation and guides',
+};
+
+const collectionIcons: Record<string, string> = {
+  log: '📅', knowledge: '🧠', skills: '⚡', agents: '🤖', 'aos-docs': '📖',
+};
+
 // ---------------------------------------------------------------------------
-// Folder Tree
+// Folder Tree (overlay panel)
 // ---------------------------------------------------------------------------
 
-function FolderTree({ nodes, selectedPath, onSelect, expandedPaths, onToggle, depth = 0 }: { nodes: TreeNode[]; selectedPath: string; onSelect: (path: string) => void; expandedPaths: Set<string>; onToggle: (path: string) => void; depth?: number }) {
+function FolderTree({ nodes, selectedPath, onSelect, expandedPaths, onToggle, depth = 0 }: {
+  nodes: TreeNode[]; selectedPath: string; onSelect: (path: string) => void;
+  expandedPaths: Set<string>; onToggle: (path: string) => void; depth?: number;
+}) {
   if (!Array.isArray(nodes)) return null;
   return (
     <div className={depth > 0 ? 'ml-3' : ''}>
@@ -83,7 +186,7 @@ function FolderTree({ nodes, selectedPath, onSelect, expandedPaths, onToggle, de
               <button
                 onClick={() => onToggle(node.path)}
                 className="w-full flex items-center gap-1.5 py-2 px-2.5 rounded-[5px] text-left hover:bg-hover transition-colors cursor-pointer"
-                style={{ transitionDuration: 'var(--duration-instant)' }}
+                style={{ transitionDuration: '80ms' }}
               >
                 {expandedPaths.has(node.path)
                   ? <ChevronDown className="w-3 h-3 text-text-quaternary shrink-0" />
@@ -112,7 +215,7 @@ function FolderTree({ nodes, selectedPath, onSelect, expandedPaths, onToggle, de
                   : 'hover:bg-hover text-text-secondary'
                 }
               `}
-              style={{ transitionDuration: 'var(--duration-instant)' }}
+              style={{ transitionDuration: '80ms' }}
             >
               <FileText className={`w-4 h-4 shrink-0 ${selectedPath === node.path ? 'text-accent' : 'text-text-quaternary'}`} />
               <span className="text-[13px] truncate">{node.name.replace('.md', '')}</span>
@@ -125,7 +228,7 @@ function FolderTree({ nodes, selectedPath, onSelect, expandedPaths, onToggle, de
 }
 
 // ---------------------------------------------------------------------------
-// Search Result Card — document feel
+// Search Result Card
 // ---------------------------------------------------------------------------
 
 function SearchResultCard({ result, onSelect }: { result: SearchResult; onSelect: () => void }) {
@@ -135,31 +238,28 @@ function SearchResultCard({ result, onSelect }: { result: SearchResult; onSelect
   return (
     <button
       onClick={onSelect}
-      className="w-full text-left px-3 py-3.5 rounded-[5px] hover:bg-hover transition-all cursor-pointer group border border-transparent hover:border-border"
-      style={{ transitionDuration: 'var(--duration-instant)' }}
+      className="w-full text-left px-4 py-4 rounded-[5px] hover:bg-hover transition-all cursor-pointer group border border-transparent hover:border-border-secondary"
+      style={{ transitionDuration: '80ms' }}
     >
-      <div className="flex items-start gap-2.5">
-        <FileText className="w-4 h-4 text-text-quaternary shrink-0 mt-0.5 group-hover:text-accent transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }} />
+      <div className="flex items-start gap-3">
+        <FileText className="w-4 h-4 text-text-quaternary shrink-0 mt-0.5 group-hover:text-accent transition-colors" style={{ transitionDuration: '80ms' }} />
         <div className="flex-1 min-w-0">
-          {/* Title — serif */}
-          <span className="text-[14px] font-serif font-[500] text-text-secondary group-hover:text-text truncate block leading-tight transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }}>
+          <span className="text-[15px] font-serif font-[500] text-text-secondary group-hover:text-text truncate block leading-tight transition-colors" style={{ transitionDuration: '80ms' }}>
             {displayName}
           </span>
-          {/* Collection badge */}
-          <div className="flex items-center gap-2 mt-1.5">
+          <div className="flex items-center gap-2 mt-2">
             <Tag label={collection} color="gray" size="sm" />
             {result.score !== undefined && (
               <div className="flex items-center gap-1.5">
-                <div className="w-12 h-1 bg-bg-tertiary rounded-full overflow-hidden">
-                  <div className="h-full bg-accent/60 rounded-full" style={{ width: `${Math.min(100, result.score * 100)}%` }} />
+                <div className="w-14 h-1 bg-bg-tertiary rounded-full overflow-hidden">
+                  <div className="h-full bg-accent/50 rounded-full" style={{ width: `${Math.min(100, result.score * 100)}%` }} />
                 </div>
                 <span className="text-[9px] text-text-quaternary tabular-nums">{Math.round(result.score * 100)}</span>
               </div>
             )}
           </div>
-          {/* Snippet — serif */}
           {result.snippet && (
-            <p className="text-[12px] font-serif text-text-quaternary mt-1.5 line-clamp-2 leading-[1.5]">{result.snippet}</p>
+            <p className="text-[13px] font-serif text-text-quaternary mt-2 line-clamp-2 leading-[1.6]">{result.snippet}</p>
           )}
         </div>
       </div>
@@ -168,7 +268,36 @@ function SearchResultCard({ result, onSelect }: { result: SearchResult; onSelect
 }
 
 // ---------------------------------------------------------------------------
-// Frontmatter Bar — warm tag colors per design system
+// Collection Card
+// ---------------------------------------------------------------------------
+
+function CollectionCard({ collection, onClick }: { collection: Collection; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="text-left p-4 rounded-[7px] border border-border-secondary hover:border-border-tertiary bg-bg-secondary hover:bg-bg-tertiary transition-all cursor-pointer group"
+      style={{ transitionDuration: '150ms' }}
+    >
+      <div className="flex items-start gap-3">
+        <span className="text-[20px] leading-none mt-0.5">{collectionIcons[collection.name] || '📁'}</span>
+        <div className="flex-1 min-w-0">
+          <span className="text-[14px] font-serif font-[600] text-text group-hover:text-text block capitalize">
+            {collection.name}
+          </span>
+          <p className="text-[12px] text-text-quaternary mt-1 leading-[1.5]">
+            {collectionDescriptions[collection.name] || `${collection.doc_count} documents`}
+          </p>
+          <span className="text-[11px] text-text-quaternary tabular-nums mt-2 block">
+            {collection.doc_count} docs
+          </span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter Bar
 // ---------------------------------------------------------------------------
 
 function FrontmatterBar({ fm }: { fm: Record<string, unknown> }) {
@@ -187,7 +316,7 @@ function FrontmatterBar({ fm }: { fm: Record<string, unknown> }) {
   return (
     <div className="flex flex-wrap items-center gap-2 mt-4">
       {badges.map(b => (
-        <Tag key={b.label} label={`${b.value}`} color={b.color} size="sm" icon={b.label.startsWith('stage') ? <Layers className="w-3 h-3" /> : undefined} />
+        <Tag key={b.label} label={b.value} color={b.color} size="sm" icon={b.label.startsWith('stage') ? <Layers className="w-3 h-3" /> : undefined} />
       ))}
       {fm.date && (
         <span className="inline-flex items-center gap-1.5 text-[11px] text-text-quaternary">
@@ -206,53 +335,50 @@ function FrontmatterBar({ fm }: { fm: Record<string, unknown> }) {
 }
 
 // ---------------------------------------------------------------------------
-// Markdown Content — serif-first, warm
+// Markdown Content
 // ---------------------------------------------------------------------------
 
-function MarkdownContent({ body }: { body: string }) {
-  return (
-    <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-      h1: ({ children }) => <h1 className="text-[24px] font-serif font-[700] text-text tracking-[-0.02em] mt-10 mb-4 pb-3 border-b border-border">{children}</h1>,
-      h2: ({ children }) => <h2 className="text-[19px] font-serif font-[650] text-text tracking-[-0.015em] mt-8 mb-3">{children}</h2>,
-      h3: ({ children }) => <h3 className="text-[16px] font-serif font-[600] text-text tracking-[-0.01em] mt-6 mb-2">{children}</h3>,
-      p: ({ children }) => <p className="text-[15px] font-serif leading-[1.75] text-text-secondary mb-4">{children}</p>,
-      li: ({ children }) => <li className="text-[15px] font-serif leading-[1.75] text-text-secondary mb-1">{children}</li>,
-      ul: ({ children }) => <ul className="list-disc pl-5 mb-4 space-y-0.5">{children}</ul>,
-      ol: ({ children }) => <ol className="list-decimal pl-5 mb-4 space-y-0.5">{children}</ol>,
-      a: ({ href, children }) => <a href={href} className="text-accent hover:text-accent-hover underline underline-offset-2 decoration-accent/30 transition-colors cursor-pointer" style={{ transitionDuration: 'var(--duration-instant)' }}>{children}</a>,
-      blockquote: ({ children }) => <blockquote className="border-l-[3px] border-accent/30 pl-4 my-4 text-text-tertiary italic font-serif">{children}</blockquote>,
-      strong: ({ children }) => <strong className="font-[600] text-text">{children}</strong>,
-      hr: () => <hr className="border-border my-8" />,
-      table: ({ children }) => <div className="overflow-x-auto my-4 rounded-[7px] border border-border"><table className="w-full text-[13px]">{children}</table></div>,
-      thead: ({ children }) => <thead className="bg-bg-tertiary">{children}</thead>,
-      th: ({ children }) => <th className="px-3 py-2 text-left font-[600] text-text-secondary border-b border-border text-[12px]">{children}</th>,
-      td: ({ children }) => <td className="px-3 py-2 text-text-secondary border-b border-border/50 text-[13px]">{children}</td>,
-      code: ({ className, children }) => {
-        const match = /language-(\w+)/.exec(className || '');
-        if (!match) return <code className="text-[13px] bg-bg-tertiary text-accent px-1.5 py-0.5 rounded-[4px] font-mono">{children}</code>;
-        return <SyntaxHighlighter style={oneDark} language={match[1]} PreTag="div" customStyle={{ background: 'var(--bg-tertiary, #2A2520)', padding: '16px', borderRadius: '7px', fontSize: '13px', margin: '16px 0', border: '1px solid rgba(255, 245, 235, 0.06)' }}>{String(children).replace(/\n$/, '')}</SyntaxHighlighter>;
-      },
-      pre: ({ children }) => <>{children}</>,
-    }}>{body}</ReactMarkdown>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Main Vault Page
 // ---------------------------------------------------------------------------
 
 export default function VaultPage() {
+  const section = useSectionFromRoute();
+  const meta = sectionMeta[section];
+  const SectionIcon = meta.icon;
+
   const [tree, setTree] = useState<TreeNode[]>([]);
+  const [collections, setCollections] = useState<Collection[]>([]);
   const [file, setFile] = useState<VaultFile | null>(null);
   const [selectedPath, setSelectedPath] = useState('');
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(['knowledge', 'log']));
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [searchTier, setSearchTier] = useState<'idle' | 'fuzzy' | 'fast' | 'enhanced'>('idle');
+  const [treeOpen, setTreeOpen] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
-  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fastTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const enhancedTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchVersionRef = useRef(0); // tracks query version to discard stale results
+
+  // Clear file when switching sections
+  useEffect(() => {
+    setFile(null);
+    setSelectedPath('');
+    setSearchQuery('');
+    setSearchResults([]);
+    setSearchTier('idle');
+  }, [section]);
+
+  // Auto-expand relevant folders for section
+  useEffect(() => {
+    if (meta.collections.length > 0) {
+      setExpandedPaths(prev => new Set([...prev, ...meta.collections]));
+    }
+  }, [section]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch tree
   useEffect(() => {
@@ -269,12 +395,8 @@ export default function VaultPage() {
           .then(r => r.ok ? r.json() : null)
           .then(d => {
             if (!d?.collections) return;
-            const nodes: TreeNode[] = d.collections.map((c: { name: string; doc_count: number }) => ({
-              name: c.name,
-              path: c.name,
-              type: 'folder' as const,
-              children: [],
-              count: c.doc_count,
+            const nodes: TreeNode[] = d.collections.map((c: Collection) => ({
+              name: c.name, path: c.name, type: 'folder' as const, children: [], count: c.doc_count,
             }));
             setTree(nodes);
           })
@@ -282,30 +404,129 @@ export default function VaultPage() {
       });
   }, []);
 
-  // Search with debounce
+  // Fetch collections
   useEffect(() => {
-    if (searchTimeout.current) clearTimeout(searchTimeout.current);
-    if (!searchQuery || searchQuery.length < 2) { setSearchResults([]); setSearching(false); return; }
+    fetch(`${API}/vault/collections`)
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.collections) setCollections(d.collections); })
+      .catch(() => {});
+  }, []);
+
+  // Filter collections for the current section
+  const filteredCollections = useMemo(() => {
+    if (section === 'all') return collections;
+    return collections.filter(c => meta.collections.includes(c.name));
+  }, [collections, section, meta.collections]);
+
+  // Filter tree nodes for the current section
+  const filteredTree = useMemo(() => {
+    if (section === 'all') return tree;
+    return tree.filter(node => meta.collections.includes(node.name) || meta.collections.includes(node.path));
+  }, [tree, section, meta.collections]);
+
+  // Pre-flatten tree for fuzzy search (memoized)
+  const flatFiles = useMemo(() => {
+    const files = flattenTree(filteredTree);
+    return files;
+  }, [filteredTree]);
+
+  // Cache for search results to avoid re-fetching identical queries
+  const searchCache = useRef<Map<string, SearchResult[]>>(new Map());
+
+  // Build collection query param
+  const collectionParam = meta.collections.length === 1
+    ? `&collection=${encodeURIComponent(meta.collections[0])}`
+    : '';
+
+  // -----------------------------------------------------------------------
+  // Three-tier progressive search
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    // Bump version to invalidate any in-flight requests
+    const version = ++searchVersionRef.current;
+
+    // Clear timers
+    if (fastTimeout.current) clearTimeout(fastTimeout.current);
+    if (enhancedTimeout.current) clearTimeout(enhancedTimeout.current);
+
+    if (!searchQuery || searchQuery.length < 2) {
+      setSearchResults([]);
+      setSearching(false);
+      setSearchTier('idle');
+      return;
+    }
+
+    // --- Tier 0: Instant fuzzy match (< 1ms) ---
+    const fuzzyResults = fuzzySearch(searchQuery, flatFiles);
+    setSearchResults(fuzzyResults);
+    setSearchTier('fuzzy');
     setSearching(true);
-    searchTimeout.current = setTimeout(() => {
-      fetch(`${API}/vault/search?q=${encodeURIComponent(searchQuery)}`)
+
+    // --- Tier 1: Fast BM25 (150ms debounce, ~200ms server) ---
+    const cacheKeyFast = `fast:${searchQuery}${collectionParam}`;
+    const cachedFast = searchCache.current.get(cacheKeyFast);
+    if (cachedFast) {
+      // Cache hit — use immediately, still fire enhanced
+      setSearchResults(cachedFast);
+      setSearchTier('fast');
+    }
+
+    fastTimeout.current = setTimeout(() => {
+      if (cachedFast) return; // Already used cache
+      const url = `${API}/vault/search?q=${encodeURIComponent(searchQuery)}&mode=fast${collectionParam}`;
+      fetch(url)
+        .then(r => r.ok ? r.json() : null)
         .then(r => {
-          if (!r.ok) throw new Error();
-          const ct = r.headers.get('content-type') || '';
-          if (!ct.includes('application/json')) throw new Error();
-          return r.json();
+          if (searchVersionRef.current !== version) return; // stale
+          const results: SearchResult[] = (Array.isArray(r?.results) ? r.results : [])
+            .map((item: SearchResult) => ({ ...item, source: 'fast' as const }));
+          if (results.length > 0) {
+            searchCache.current.set(cacheKeyFast, results);
+            setSearchResults(results);
+            setSearchTier('fast');
+          }
         })
+        .catch(() => {});
+    }, cachedFast ? 0 : 150);
+
+    // --- Tier 2: Enhanced reranked (300ms debounce, ~800ms server) ---
+    const cacheKeyEnhanced = `enhanced:${searchQuery}${collectionParam}`;
+    const cachedEnhanced = searchCache.current.get(cacheKeyEnhanced);
+    if (cachedEnhanced) {
+      // Already have enhanced results cached — use them
+      setSearchResults(cachedEnhanced);
+      setSearchTier('enhanced');
+      setSearching(false);
+      return;
+    }
+
+    enhancedTimeout.current = setTimeout(() => {
+      const url = `${API}/vault/search?q=${encodeURIComponent(searchQuery)}&mode=enhanced${collectionParam}`;
+      fetch(url)
+        .then(r => r.ok ? r.json() : null)
         .then(r => {
-          setSearchResults(Array.isArray(r.results) ? r.results : Array.isArray(r) ? r : []);
+          if (searchVersionRef.current !== version) return; // stale
+          const results: SearchResult[] = (Array.isArray(r?.results) ? r.results : [])
+            .map((item: SearchResult) => ({ ...item, source: 'enhanced' as const }));
+          if (results.length > 0) {
+            searchCache.current.set(cacheKeyEnhanced, results);
+            setSearchResults(results);
+            setSearchTier('enhanced');
+          }
           setSearching(false);
         })
-        .catch(() => { setSearchResults([]); setSearching(false); });
+        .catch(() => { setSearching(false); });
     }, 300);
-  }, [searchQuery]);
+
+    return () => {
+      if (fastTimeout.current) clearTimeout(fastTimeout.current);
+      if (enhancedTimeout.current) clearTimeout(enhancedTimeout.current);
+    };
+  }, [searchQuery, flatFiles, collectionParam]);
 
   const loadFile = useCallback(async (path: string) => {
     setSelectedPath(path);
-    setSidebarOpen(false);
+    setTreeOpen(false);
     try {
       const resp = await fetch(`${API}/vault/file/${encodeURIComponent(path)}`);
       const data = await resp.json();
@@ -327,148 +548,303 @@ export default function VaultPage() {
 
   const breadcrumbs = useMemo(() => selectedPath ? selectedPath.split('/') : [], [selectedPath]);
 
-  // Keyboard shortcut: Cmd+K or / to focus search
+  // Keyboard: Cmd+K or / to focus search, Escape to close tree
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if ((e.metaKey && e.key === 'k') || (e.key === '/' && !file && document.activeElement?.tagName !== 'INPUT')) {
         e.preventDefault();
         searchInputRef.current?.focus();
       }
+      if (e.key === 'Escape' && treeOpen) {
+        setTreeOpen(false);
+      }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [file]);
+  }, [file, treeOpen]);
 
-  // --- Sidebar content ---
-  const sidebarContent = (
-    <div className="flex flex-col h-full">
-      {/* Search */}
-      <div className="p-3 border-b border-border">
-        <div className="flex items-center gap-2.5 px-3 py-2.5 rounded-[5px] bg-bg-tertiary border border-border-secondary transition-colors focus-within:border-border-tertiary" style={{ transitionDuration: 'var(--duration-fast)' }}>
-          <Search className="w-4 h-4 text-text-quaternary shrink-0" />
-          <input
-            ref={searchInputRef}
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Search vault..."
-            className="flex-1 text-[13px] bg-transparent text-text placeholder:text-text-quaternary outline-none"
-          />
-          {searchQuery ? (
-            <button onClick={() => { setSearchQuery(''); setSearchResults([]); }} className="p-0.5 rounded-xs hover:bg-hover transition-colors cursor-pointer" style={{ transitionDuration: 'var(--duration-instant)' }}>
-              <X className="w-3.5 h-3.5 text-text-quaternary" />
+  const goBack = useCallback(() => {
+    setFile(null);
+    setSelectedPath('');
+  }, []);
+
+  // -----------------------------------------------------------------------
+  // File reading view — immersive, full-width, mobile-first
+  // -----------------------------------------------------------------------
+  if (file) {
+    return (
+      <div className="h-full flex flex-col bg-bg">
+        {/* Top bar — touch-friendly on mobile */}
+        <div className="shrink-0 px-4 sm:px-6 py-2 sm:py-3 border-b border-border">
+          <div className="max-w-[720px] mx-auto flex items-center gap-1 sm:gap-2">
+            <button
+              onClick={goBack}
+              className="p-2 sm:p-1.5 -ml-2 sm:-ml-1.5 rounded-[5px] hover:bg-hover cursor-pointer transition-colors"
+              style={{ transitionDuration: '80ms' }}
+            >
+              <ArrowLeft className="w-4 h-4 text-text-tertiary" />
             </button>
-          ) : (
-            <kbd className="text-[9px] text-text-quaternary bg-bg-secondary border border-border rounded-xs px-1.5 py-0.5 leading-none">/</kbd>
+
+            {/* Breadcrumbs — hidden on mobile, show title instead */}
+            <h1 className="sm:hidden text-[14px] font-serif font-[590] text-text truncate flex-1">
+              {(file.frontmatter?.title as string) || file.title || file.name.replace('.md', '')}
+            </h1>
+            <div className="hidden sm:flex items-center gap-1 text-[11px] text-text-quaternary flex-1 min-w-0">
+              <button onClick={goBack} className="hover:text-text-tertiary shrink-0 cursor-pointer transition-colors" style={{ transitionDuration: '80ms' }}>{meta.title.toLowerCase()}</button>
+              {breadcrumbs.map((crumb, i) => (
+                <span key={i} className="flex items-center gap-1 min-w-0">
+                  <ChevronRight className="w-2.5 h-2.5 shrink-0" />
+                  <span className={`truncate ${i === breadcrumbs.length - 1 ? 'text-text-tertiary font-[510]' : ''}`}>{crumb.replace('.md', '')}</span>
+                </span>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setTreeOpen(true)}
+              className="p-2 sm:p-1.5 rounded-[5px] hover:bg-hover cursor-pointer transition-colors"
+              style={{ transitionDuration: '80ms' }}
+              title="Browse files"
+            >
+              <FolderTreeIcon className="w-4 h-4 text-text-quaternary" />
+            </button>
+          </div>
+        </div>
+
+        {/* Document content */}
+        <div ref={contentRef} className="flex-1 overflow-y-auto">
+          <div className="max-w-[720px] mx-auto px-5 sm:px-8 py-6 sm:py-10">
+            <h1 className="hidden sm:block text-[26px] font-serif font-[700] text-text tracking-[-0.025em] leading-[1.2]">
+              {(file.frontmatter?.title as string) || file.title || file.name.replace('.md', '')}
+            </h1>
+            {file.frontmatter && <FrontmatterBar fm={file.frontmatter} />}
+            <div className="mt-6 sm:mt-8" />
+            <MarkdownRenderer content={file.body || file.content} />
+          </div>
+        </div>
+
+        {treeOpen && (
+          <TreeOverlay
+            tree={filteredTree}
+            selectedPath={selectedPath}
+            onSelect={loadFile}
+            expandedPaths={expandedPaths}
+            onToggle={toggleFolder}
+            onClose={() => setTreeOpen(false)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // -----------------------------------------------------------------------
+  // Browse view — centered, content-first, section-aware
+  // -----------------------------------------------------------------------
+  const isSearching = searchQuery.length >= 2;
+  const searchPlaceholder = section === 'all'
+    ? 'Search across all collections...'
+    : `Search ${meta.title.toLowerCase()}...`;
+
+  return (
+    <div className="h-full flex flex-col bg-bg">
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-[640px] mx-auto px-5 sm:px-8 py-8 sm:py-16">
+          {/* Header */}
+          <div className="mb-6 sm:mb-8">
+            <div className="flex items-center gap-2.5 mb-2">
+              <SectionIcon className="w-5 h-5 text-text-quaternary" />
+              <h1 className="text-[24px] font-serif font-[600] text-text tracking-[-0.02em]">{meta.title}</h1>
+            </div>
+            <p className="text-[14px] font-serif text-text-tertiary leading-[1.6]">
+              {meta.description}
+            </p>
+          </div>
+
+          {/* Search */}
+          <div className="mb-6 sm:mb-8">
+            <div className="flex items-center gap-2.5 px-4 py-3 rounded-[7px] bg-bg-secondary border border-border-secondary transition-colors focus-within:border-border-tertiary" style={{ transitionDuration: '150ms' }}>
+              <Search className="w-4 h-4 text-text-quaternary shrink-0" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={e => setSearchQuery(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="flex-1 text-[14px] font-serif bg-transparent text-text placeholder:text-text-quaternary outline-none"
+              />
+              {searchQuery ? (
+                <button onClick={() => { setSearchQuery(''); setSearchResults([]); }} className="p-1.5 rounded-xs hover:bg-hover transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }}>
+                  <X className="w-3.5 h-3.5 text-text-quaternary" />
+                </button>
+              ) : (
+                <kbd className="hidden sm:inline text-[9px] text-text-quaternary bg-bg-tertiary border border-border rounded-xs px-1.5 py-0.5 leading-none font-sans">/</kbd>
+              )}
+            </div>
+          </div>
+
+          {/* Search results — progressive: fuzzy → fast → enhanced */}
+          {isSearching && (
+            <div className="mb-8">
+              {searchResults.length > 0 ? (
+                <div>
+                  <div className="flex items-center gap-2 mb-3 px-1">
+                    <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
+                      {searchResults.length} results
+                    </span>
+                    {searching && searchTier !== 'enhanced' && (
+                      <div className="flex items-center gap-1.5">
+                        <div className="w-3 h-3 border-[1.5px] border-accent/30 border-t-accent rounded-full animate-spin" />
+                        <span className="text-[9px] text-text-quaternary">
+                          {searchTier === 'fuzzy' ? 'Searching...' : 'Refining...'}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="space-y-1">
+                    {searchResults.map(r => (
+                      <SearchResultCard key={r.path} result={r} onSelect={() => loadFile(r.path)} />
+                    ))}
+                  </div>
+                </div>
+              ) : searching ? (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin mb-3" />
+                  <p className="text-[12px] text-text-quaternary">Searching...</p>
+                </div>
+              ) : (
+                <div className="flex flex-col items-center justify-center py-16">
+                  <Search className="w-8 h-8 text-text-quaternary opacity-20 mb-3" />
+                  <p className="text-[13px] font-serif text-text-quaternary">No results for "{searchQuery}"</p>
+                  <p className="text-[11px] text-text-quaternary mt-1">Try different keywords</p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Collections / browse — shown when not searching */}
+          {!isSearching && (
+            <>
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
+                  {section === 'all' ? 'Collections' : 'Browse'}
+                </span>
+                <button
+                  onClick={() => setTreeOpen(true)}
+                  className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer p-1 -m-1"
+                  style={{ transitionDuration: '80ms' }}
+                >
+                  <FolderTreeIcon className="w-3.5 h-3.5" />
+                  <span>Browse files</span>
+                </button>
+              </div>
+
+              {/* Show collection cards for 'all' view, or just the tree trigger for section views */}
+              {section === 'all' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {collections.map(c => (
+                    <CollectionCard
+                      key={c.name}
+                      collection={c}
+                      onClick={() => {
+                        setExpandedPaths(prev => new Set([...prev, c.name]));
+                        setTreeOpen(true);
+                      }}
+                    />
+                  ))}
+                </div>
+              ) : (
+                /* For section views, show the file tree inline instead of cards */
+                <div className="rounded-[7px] border border-border-secondary bg-bg-secondary p-3">
+                  {filteredTree.length > 0 ? (
+                    <FolderTree
+                      nodes={filteredTree}
+                      selectedPath={selectedPath}
+                      onSelect={loadFile}
+                      expandedPaths={expandedPaths}
+                      onToggle={toggleFolder}
+                    />
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-12">
+                      <SectionIcon className="w-8 h-8 text-text-quaternary opacity-15 mb-3" />
+                      <p className="text-[13px] font-serif text-text-quaternary">Loading...</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {section === 'all' && collections.length === 0 && (
+                <div className="flex flex-col items-center justify-center py-20">
+                  <Library className="w-10 h-10 text-text-quaternary opacity-15 mb-4" />
+                  <p className="text-[14px] font-serif text-text-tertiary">Connecting to vault...</p>
+                </div>
+              )}
+            </>
           )}
         </div>
       </div>
 
-      {/* Tree or search results */}
-      <div className="flex-1 overflow-y-auto p-2">
-        {searchQuery && searchResults.length > 0 ? (
-          <div>
-            <div className="type-overline text-text-quaternary px-2 py-1.5 mb-1">{searchResults.length} results</div>
-            {searchResults.map(r => (
-              <SearchResultCard key={r.path} result={r} onSelect={() => loadFile(r.path)} />
-            ))}
-          </div>
-        ) : searchQuery && searching ? (
-          <div className="flex flex-col items-center justify-center py-16">
-            <div className="w-5 h-5 border-2 border-accent/30 border-t-accent rounded-full animate-spin mb-3" />
-            <p className="text-[12px] text-text-quaternary">Searching...</p>
-          </div>
-        ) : searchQuery && !searching ? (
-          <div className="flex flex-col items-center justify-center py-16">
-            <Search className="w-8 h-8 text-text-quaternary opacity-20 mb-3" />
-            <p className="text-[13px] text-text-quaternary">No results for "{searchQuery}"</p>
-            <p className="text-[11px] text-text-quaternary mt-1">Try different keywords</p>
-          </div>
-        ) : (
-          <FolderTree nodes={tree} selectedPath={selectedPath} onSelect={loadFile} expandedPaths={expandedPaths} onToggle={toggleFolder} />
-        )}
-      </div>
+      {/* Tree overlay */}
+      {treeOpen && (
+        <TreeOverlay
+          tree={filteredTree}
+          selectedPath={selectedPath}
+          onSelect={loadFile}
+          expandedPaths={expandedPaths}
+          onToggle={toggleFolder}
+          onClose={() => setTreeOpen(false)}
+        />
+      )}
     </div>
   );
+}
 
+// ---------------------------------------------------------------------------
+// Tree Overlay — floating panel, not a permanent sidebar
+// ---------------------------------------------------------------------------
+
+function TreeOverlay({ tree, selectedPath, onSelect, expandedPaths, onToggle, onClose }: {
+  tree: TreeNode[]; selectedPath: string; onSelect: (path: string) => void;
+  expandedPaths: Set<string>; onToggle: (path: string) => void; onClose: () => void;
+}) {
   return (
-    <div className="flex overflow-hidden h-full bg-bg">
-      {/* Mobile sidebar overlay */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 z-50 md:hidden" onClick={() => setSidebarOpen(false)}>
-          <div className="absolute inset-0 bg-black/50 backdrop-blur-sm transition-opacity" style={{ transitionDuration: 'var(--duration-fast)' }} />
-          <div className="absolute left-0 top-0 bottom-0 w-[300px] bg-bg border-r border-border shadow-[var(--shadow-high)]" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-              <span className="text-[14px] font-serif font-[600] text-text">Vault</span>
-              <button onClick={() => setSidebarOpen(false)} className="p-1.5 rounded-[5px] hover:bg-hover cursor-pointer transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }}>
-                <X className="w-4 h-4 text-text-tertiary" />
-              </button>
-            </div>
-            {sidebarContent}
+    <div className="fixed inset-0 z-50" onClick={onClose}>
+      {/* Backdrop */}
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+
+      {/* Panel — slides from left, capped at 85vw on mobile */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-[300px] max-w-[85vw] bg-bg-panel border-r border-border shadow-[0_0_40px_rgba(0,0,0,0.4)] flex flex-col"
+        style={{ animation: 'slide-in-left 180ms ease-out forwards' }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+          <div className="flex items-center gap-2">
+            <FolderTreeIcon className="w-4 h-4 text-text-quaternary" />
+            <span className="text-[13px] font-[510] text-text">Browse files</span>
           </div>
+          <button onClick={onClose} className="p-2 sm:p-1.5 rounded-[5px] hover:bg-hover cursor-pointer transition-colors" style={{ transitionDuration: '80ms' }}>
+            <X className="w-4 h-4 text-text-tertiary" />
+          </button>
         </div>
-      )}
 
-      {/* Desktop sidebar */}
-      <div className="hidden md:flex w-[280px] shrink-0 border-r border-border flex-col bg-bg">
-        {sidebarContent}
+        {/* Tree */}
+        <div className="flex-1 overflow-y-auto p-2">
+          <FolderTree
+            nodes={tree}
+            selectedPath={selectedPath}
+            onSelect={(path) => { onSelect(path); onClose(); }}
+            expandedPaths={expandedPaths}
+            onToggle={onToggle}
+          />
+        </div>
       </div>
 
-      {/* Content area */}
-      <div className="flex-1 flex flex-col min-w-0">
-        {file ? (
-          <>
-            {/* Breadcrumb bar */}
-            <div className="shrink-0 px-4 sm:px-6 py-3 border-b border-border">
-              <div className="flex items-center gap-2">
-                <button onClick={() => setSidebarOpen(true)} className="md:hidden p-1.5 -ml-1.5 rounded-[5px] hover:bg-hover cursor-pointer transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }}>
-                  <Menu className="w-4 h-4 text-text-tertiary" />
-                </button>
-                <button onClick={() => { setFile(null); setSelectedPath(''); }} className="md:hidden p-1.5 rounded-[5px] hover:bg-hover cursor-pointer transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }}>
-                  <ArrowLeft className="w-4 h-4 text-text-tertiary" />
-                </button>
-                <div className="hidden md:flex items-center gap-1 text-[11px] text-text-quaternary flex-1 min-w-0">
-                  <button onClick={() => { setFile(null); setSelectedPath(''); }} className="hover:text-text-tertiary shrink-0 cursor-pointer transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }}>vault</button>
-                  {breadcrumbs.map((crumb, i) => (
-                    <span key={i} className="flex items-center gap-1 min-w-0">
-                      <ChevronRight className="w-2.5 h-2.5 shrink-0" />
-                      <span className={`truncate ${i === breadcrumbs.length - 1 ? 'text-text-tertiary font-[510]' : ''}`}>{crumb.replace('.md', '')}</span>
-                    </span>
-                  ))}
-                </div>
-                <h1 className="md:hidden text-[14px] font-serif font-[590] text-text truncate flex-1">{(file.frontmatter?.title as string) || file.title || file.name.replace('.md', '')}</h1>
-              </div>
-            </div>
-
-            {/* Document content */}
-            <div ref={contentRef} className="flex-1 overflow-y-auto">
-              <div className="max-w-[720px] mx-auto px-6 sm:px-8 py-8 sm:py-10">
-                {/* Document title — serif, large */}
-                <h1 className="hidden md:block text-[26px] font-serif font-[700] text-text tracking-[-0.025em] leading-[1.2]">
-                  {(file.frontmatter?.title as string) || file.title || file.name.replace('.md', '')}
-                </h1>
-                {file.frontmatter && <FrontmatterBar fm={file.frontmatter} />}
-                <div className="mt-8" />
-                <MarkdownContent body={file.body || file.content} />
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex-1 flex flex-col">
-            {/* Mobile: show sidebar content inline */}
-            <div className="md:hidden flex-1 overflow-y-auto">{sidebarContent}</div>
-
-            {/* Desktop: empty state */}
-            <div className="hidden md:flex flex-1 flex-col items-center justify-center text-center px-6">
-              <BookOpen className="w-12 h-12 text-text-quaternary mb-4 opacity-20" />
-              <h2 className="text-[18px] font-serif font-[600] text-text mb-2">Your knowledge vault</h2>
-              <p className="text-[13px] font-serif text-text-tertiary max-w-[360px] leading-[1.6]">
-                Browse your collected knowledge, research, and decisions. Select a document from the sidebar, or press <kbd className="text-[11px] bg-bg-tertiary border border-border rounded-xs px-1.5 py-0.5 font-sans">/</kbd> to search.
-              </p>
-            </div>
-          </div>
-        )}
-      </div>
+      <style>{`
+        @keyframes slide-in-left {
+          from { transform: translateX(-100%); opacity: 0.8; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
