@@ -35,7 +35,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
   const hasWork = staleCaptures.length > 0 || freshCaptures.length > 0 || synthesisItems.length > 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {/* Summary — sentence, not stats. DESIGN.md: "No stat dumps. The qareen speaks in sentences." */}
       <p className="text-[13px] font-serif text-text-tertiary leading-[1.6]">
         {stats.total_documents} documents across the pipeline.
@@ -58,7 +58,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
       {staleCaptures.length > 0 && (
         <section>
           <FeedSectionHeader icon={<AlertTriangle className="w-3.5 h-3.5" />} label="Unprocessed" count={staleCaptures.length} />
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {staleCaptures.map(item => (
               <FeedItem
                 key={item.path}
@@ -80,7 +80,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
       {freshCaptures.length > 0 && (
         <section>
           <FeedSectionHeader icon={<Inbox className="w-3.5 h-3.5" />} label="Recent captures" count={freshCaptures.length} />
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {freshCaptures.map(item => (
               <FeedItem
                 key={item.path}
@@ -101,7 +101,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
       {synthesisItems.length > 0 && (
         <section>
           <FeedSectionHeader icon={<Sparkles className="w-3.5 h-3.5" />} label="Ready for synthesis" count={synthesisItems.length} />
-          <div className="space-y-1">
+          <div className="space-y-0.5">
             {synthesisItems.map(item => (
               <FeedItem
                 key={item.path}
@@ -123,7 +123,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
 
 function FeedSectionHeader({ icon, label, count }: { icon: React.ReactNode; label: string; count: number }) {
   return (
-    <div className="flex items-center gap-2 mb-2">
+    <div className="flex items-center gap-2 mb-3">
       <span className="text-text-quaternary">{icon}</span>
       <span className="text-[11px] font-[510] text-text-tertiary">{label}</span>
       <span className="text-[10px] text-text-quaternary tabular-nums">{count}</span>

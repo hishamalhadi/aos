@@ -712,7 +712,7 @@ export default function VaultPage() {
 
       {/* Content — full screen */}
       <div className="h-full overflow-y-auto">
-        <div className="max-w-[640px] mx-auto px-5 sm:px-8 pt-14 pb-8">
+        <div className="max-w-[720px] mx-auto px-6 sm:px-10 pt-14 pb-8">
 
           {/* Hidden search input — activated by clicking search icon or pressing / */}
           {(isSearching || searchQuery) && (
