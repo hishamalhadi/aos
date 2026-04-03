@@ -37,14 +37,16 @@ VAULT_DIR = Path.home() / "vault"
 QMD_PATH = os.path.expanduser("~/.bun/bin/qmd")
 
 STAGE_LABELS = {
-    1: "Capture", 2: "Triage", 3: "Research",
+    1: "Capture", 3: "Research",
     4: "Synthesis", 5: "Decision", 6: "Expertise",
 }
 STAGE_DIRS: dict[int, str] = {
-    1: "knowledge/captures", 2: "knowledge/captures",
+    1: "knowledge/captures",
     3: "knowledge/research", 4: "knowledge/synthesis",
     5: "knowledge/decisions", 6: "knowledge/expertise",
 }
+# Pipeline stages in display order (no Triage — same dir as Capture)
+PIPELINE_STAGES = [1, 3, 4, 5, 6]
 
 
 class VaultFileUpdate(PydanticBaseModel):
@@ -342,97 +344,144 @@ def _unique_dest(dest: Path) -> Path:
 # ---------------------------------------------------------------------------
 
 
-@router.get("/pipeline", response_model=PipelineStatsResponse)
-async def pipeline_stats(request: Request) -> PipelineStatsResponse:
-    """Return knowledge pipeline health stats across all stages."""
+@router.get("/pipeline")
+async def pipeline_stats(request: Request) -> dict:
+    """Return knowledge pipeline health with per-stage health, descriptions, and quality."""
     now = datetime.now()
-    stages: list[PipelineStageInfo] = []
+    stages: list[dict] = []
     total_documents = 0
-    unprocessed_captures = 0
-    research_count = 0
-    synthesis_count = 0
+    counts: dict[int, int] = {}
+    total_bytes: dict[int, int] = {}
 
-    for stage_num in range(1, 7):
+    for stage_num in PIPELINE_STAGES:
         label = STAGE_LABELS[stage_num]
         rel_dir = STAGE_DIRS[stage_num]
         stage_path = VAULT_DIR / rel_dir
 
-        items: list[VaultSearchResult] = []
+        items: list[dict] = []
         count = 0
         stale_count = 0
-        stale_days = 7 if stage_num <= 2 else 30
+        stage_bytes = 0
+        stale_days = 7 if stage_num == 1 else 30
 
         if stage_path.is_dir():
             for root, _dirs, files in os.walk(stage_path):
-                for fname in files:
+                for fname in sorted(files, reverse=True):
                     if not fname.endswith(".md"):
                         continue
                     fpath = Path(root) / fname
                     try:
-                        # Read only first 2000 chars for speed
+                        fsize = fpath.stat().st_size
+                        stage_bytes += fsize
                         with open(fpath, encoding="utf-8", errors="replace") as f:
                             head = f.read(2000)
                     except OSError:
                         continue
 
                     fm, _ = _parse_frontmatter(head)
-                    file_stage = fm.get("stage")
-
-                    # For dirs shared by multiple stages (captures = 1 & 2),
-                    # only count files matching this stage.
-                    if stage_num <= 2:
-                        if file_stage is None and stage_num == 1:
-                            pass  # default to capture
-                        elif file_stage is not None and int(file_stage) != stage_num:
-                            continue
-
                     count += 1
                     total_documents += 1
 
-                    # Check staleness
+                    # Staleness
                     try:
                         mtime = datetime.fromtimestamp(fpath.stat().st_mtime)
-                        age = now - mtime
-                        if age > timedelta(days=stale_days):
+                        if (now - mtime) > timedelta(days=stale_days):
                             stale_count += 1
-                            if stage_num <= 2 and age > timedelta(days=7):
-                                unprocessed_captures += 1
                     except OSError:
                         pass
 
-                    # Cap items list at 20
-                    if len(items) < 20:
+                    # Cap items at 15
+                    if len(items) < 15:
                         rel = str(fpath.relative_to(VAULT_DIR))
-                        items.append(VaultSearchResult(
-                            path=rel,
-                            title=fm.get("title", fname),
-                            snippet="",
-                            score=0.0,
-                            collection="knowledge",
-                        ))
+                        items.append({
+                            "path": rel,
+                            "title": fm.get("title", fname.replace(".md", "")),
+                            "size_bytes": fsize,
+                        })
 
-        if stage_num == 3:
-            research_count = count
+        counts[stage_num] = count
+        total_bytes[stage_num] = stage_bytes
+        avg_size = stage_bytes // count if count > 0 else 0
+
+        # --- Health computation ---
+        health = "healthy"
+        if stage_num == 1:
+            if stale_count > 10:
+                health = "needs_attention"
+            elif stale_count > 0:
+                health = "review"
+        elif stage_num == 3:
+            pass  # health set after all stages counted
         elif stage_num == 4:
-            synthesis_count = count
+            pass  # health set after all stages counted
+        elif stage_num == 6:
+            if avg_size < 500 and count > 10:
+                health = "low_quality"
 
-        stages.append(PipelineStageInfo(
-            stage=stage_num,
-            label=label,
-            count=count,
-            stale_count=stale_count,
-            items=items,
-        ))
+        stages.append({
+            "stage": stage_num,
+            "label": label,
+            "count": count,
+            "stale_count": stale_count,
+            "health": health,
+            "description": "",  # filled below
+            "avg_size": avg_size,
+            "items": items,
+        })
 
-    synthesis_opportunities = max(0, research_count - synthesis_count * 3)
+    # --- Post-pass: compute cross-stage health + descriptions ---
+    rc = counts.get(3, 0)
+    sc = counts.get(4, 0)
+    cc = counts.get(1, 0)
+    dc = counts.get(5, 0)
+    ec = counts.get(6, 0)
 
-    return PipelineStatsResponse(
-        stages=stages,
-        total_documents=total_documents,
-        unprocessed_captures=unprocessed_captures,
-        synthesis_opportunities=synthesis_opportunities,
-        stale_decisions=stages[4].stale_count if len(stages) > 4 else 0,
-    )
+    for s in stages:
+        sn = s["stage"]
+        cnt = s["count"]
+        stale = s["stale_count"]
+
+        if sn == 1:
+            if stale > 0:
+                s["description"] = f"{cnt} raw captures. {stale} older than a week — need processing or archiving."
+                s["health"] = "needs_attention"
+            else:
+                s["description"] = f"{cnt} raw captures, all recent."
+        elif sn == 3:
+            if sc > 0 and rc > sc * 5:
+                s["health"] = "bottleneck"
+                s["description"] = f"{cnt} research docs but only {sc} syntheses. {rc - sc * 3} could be synthesized."
+            else:
+                s["description"] = f"{cnt} deep dives and analyses."
+        elif sn == 4:
+            if rc > 0 and sc < 5:
+                s["health"] = "bottleneck"
+                s["description"] = f"Only {cnt} syntheses from {rc} research docs. This is the biggest gap."
+            else:
+                s["description"] = f"{cnt} cross-source distillations."
+        elif sn == 5:
+            if stale > 0:
+                s["description"] = f"{cnt} locked decisions. {stale} may need revisiting."
+            else:
+                s["description"] = f"{cnt} locked decisions. All current."
+                s["health"] = "healthy"
+        elif sn == 6:
+            avg = s["avg_size"]
+            if avg < 500 and cnt > 10:
+                s["health"] = "low_quality"
+                s["description"] = f"{cnt} pattern files, mostly auto-generated ({avg} bytes avg). Needs curation."
+            else:
+                s["description"] = f"{cnt} living expertise patterns."
+
+    synthesis_opportunities = max(0, rc - sc * 3)
+
+    return {
+        "stages": stages,
+        "total_documents": total_documents,
+        "unprocessed_captures": sum(1 for s in stages if s["stage"] == 1 for _ in [None] if s["stale_count"] > 0) and stages[0]["stale_count"] or 0,
+        "synthesis_opportunities": synthesis_opportunities,
+        "stale_decisions": next((s["stale_count"] for s in stages if s["stage"] == 5), 0),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +512,7 @@ async def promote_file(
 
     fm, body = _parse_frontmatter(content)
     fm["stage"] = target_stage
-    fm["type"] = STAGE_LABELS[target_stage].lower()
+    fm["type"] = STAGE_LABELS.get(target_stage, f"stage-{target_stage}").lower()
 
     new_content = _rebuild_file(fm, body)
 
@@ -489,7 +538,7 @@ async def promote_file(
         "old_path": path,
         "new_path": new_rel,
         "stage": target_stage,
-        "label": STAGE_LABELS[target_stage],
+        "label": STAGE_LABELS.get(target_stage, f"Stage {target_stage}"),
     })
 
 
