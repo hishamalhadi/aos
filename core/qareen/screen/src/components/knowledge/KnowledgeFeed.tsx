@@ -1,23 +1,7 @@
 import { Inbox, Sparkles, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { usePipelineStats, usePromoteDocument, useArchiveDocument } from '@/hooks/useKnowledge';
 import { Skeleton } from '@/components/primitives';
-import { SectionHeader } from '@/components/primitives';
 import { FeedItem } from './FeedItem';
-
-interface StatCardProps {
-  label: string;
-  value: number;
-  accent?: boolean;
-}
-
-function StatCard({ label, value, accent }: StatCardProps) {
-  return (
-    <div className="rounded-[7px] border border-border-secondary bg-bg-secondary px-4 py-3">
-      <p className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary mb-1">{label}</p>
-      <p className={`text-[22px] font-[600] leading-none ${accent ? 'text-accent' : 'text-text'}`}>{value}</p>
-    </div>
-  );
-}
 
 interface KnowledgeFeedProps {
   onOpenFile: (path: string) => void;
@@ -30,20 +14,11 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
 
   if (isLoading) {
     return (
-      <div className="space-y-4 p-4">
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="rounded-[7px] border border-border-secondary bg-bg-secondary px-4 py-3">
-              <Skeleton className="h-3 w-16 mb-2" />
-              <Skeleton className="h-6 w-10" />
-            </div>
-          ))}
-        </div>
-        <div className="space-y-2">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-16 w-full rounded-[7px]" />
-          ))}
-        </div>
+      <div className="space-y-3">
+        <Skeleton className="h-4 w-64 rounded-xs" />
+        <Skeleton className="h-12 w-full rounded-[5px]" />
+        <Skeleton className="h-12 w-full rounded-[5px]" />
+        <Skeleton className="h-12 w-full rounded-[5px]" />
       </div>
     );
   }
@@ -60,29 +35,30 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
   const hasWork = staleCaptures.length > 0 || freshCaptures.length > 0 || synthesisItems.length > 0;
 
   return (
-    <div className="space-y-6 p-4">
-      {/* Stats Grid */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <StatCard label="Documents" value={stats.total_documents} />
-        <StatCard label="Unprocessed" value={stats.unprocessed_captures} accent={stats.unprocessed_captures > 0} />
-        <StatCard label="Synthesis Ready" value={stats.synthesis_opportunities} />
-        <StatCard label="Stale Decisions" value={stats.stale_decisions} />
-      </div>
+    <div className="space-y-6">
+      {/* Summary — sentence, not stats. DESIGN.md: "No stat dumps. The qareen speaks in sentences." */}
+      <p className="text-[13px] font-serif text-text-tertiary leading-[1.6]">
+        {stats.total_documents} documents across the pipeline.
+        {stats.unprocessed_captures > 0 && <> <span className="text-yellow">{stats.unprocessed_captures} unprocessed</span>.</>}
+        {stats.synthesis_opportunities > 0 && <> <span className="text-accent">{stats.synthesis_opportunities} ready for synthesis</span>.</>}
+        {stats.stale_decisions > 0 && <> <span className="text-yellow">{stats.stale_decisions} stale decisions</span>.</>}
+        {stats.unprocessed_captures === 0 && stats.synthesis_opportunities === 0 && stats.stale_decisions === 0 && <> Everything is current.</>}
+      </p>
 
       {/* All Clear */}
       {!hasWork && (
         <div className="flex flex-col items-center justify-center py-12">
-          <CheckCircle2 className="w-10 h-10 text-green opacity-40 mb-3" />
-          <p className="text-[14px] font-[510] text-text-tertiary">All clear</p>
-          <p className="text-[12px] text-text-quaternary mt-1">No documents need attention right now</p>
+          <CheckCircle2 className="w-8 h-8 text-green opacity-30 mb-3" />
+          <p className="text-[14px] font-serif text-text-tertiary">Knowledge is up to date</p>
+          <p className="text-[12px] text-text-quaternary mt-1">Nothing needs attention right now</p>
         </div>
       )}
 
       {/* Unprocessed Captures (stale) */}
       {staleCaptures.length > 0 && (
         <section>
-          <SectionHeader icon={<AlertTriangle />} label="Unprocessed Captures" count={staleCaptures.length} />
-          <div className="space-y-1.5">
+          <FeedSectionHeader icon={<AlertTriangle className="w-3.5 h-3.5" />} label="Unprocessed" count={staleCaptures.length} />
+          <div className="space-y-1">
             {staleCaptures.map(item => (
               <FeedItem
                 key={item.path}
@@ -103,8 +79,8 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
       {/* Recent Captures */}
       {freshCaptures.length > 0 && (
         <section>
-          <SectionHeader icon={<Inbox />} label="Recent Captures" count={freshCaptures.length} />
-          <div className="space-y-1.5">
+          <FeedSectionHeader icon={<Inbox className="w-3.5 h-3.5" />} label="Recent captures" count={freshCaptures.length} />
+          <div className="space-y-1">
             {freshCaptures.map(item => (
               <FeedItem
                 key={item.path}
@@ -124,8 +100,8 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
       {/* Synthesis Opportunities */}
       {synthesisItems.length > 0 && (
         <section>
-          <SectionHeader icon={<Sparkles />} label="Synthesis Opportunities" count={synthesisItems.length} />
-          <div className="space-y-1.5">
+          <FeedSectionHeader icon={<Sparkles className="w-3.5 h-3.5" />} label="Ready for synthesis" count={synthesisItems.length} />
+          <div className="space-y-1">
             {synthesisItems.map(item => (
               <FeedItem
                 key={item.path}
@@ -141,6 +117,16 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
           </div>
         </section>
       )}
+    </div>
+  );
+}
+
+function FeedSectionHeader({ icon, label, count }: { icon: React.ReactNode; label: string; count: number }) {
+  return (
+    <div className="flex items-center gap-2 mb-2">
+      <span className="text-text-quaternary">{icon}</span>
+      <span className="text-[11px] font-[510] text-text-tertiary">{label}</span>
+      <span className="text-[10px] text-text-quaternary tabular-nums">{count}</span>
     </div>
   );
 }
