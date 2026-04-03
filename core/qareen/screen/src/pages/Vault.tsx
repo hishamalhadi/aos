@@ -674,16 +674,50 @@ export default function VaultPage() {
     : `Search ${meta.title.toLowerCase()}...`;
 
   return (
-    <div className="h-full flex flex-col bg-bg">
-      {/* Sticky compact header — title + search in one row */}
-      <div className="shrink-0 border-b border-border px-5 sm:px-8 py-3">
-        <div className="max-w-[640px] mx-auto">
-          <div className="flex items-center gap-3 mb-3">
-            <h1 className="text-[16px] font-serif font-[600] text-text tracking-[-0.01em]">{meta.title}</h1>
-            <span className="text-[11px] text-text-quaternary hidden sm:inline">{meta.description}</span>
+    <div className="h-full overflow-hidden bg-bg relative">
+      {/* Floating glass pill — tabs + search + browse, matching Work page pattern */}
+      {section === 'knowledge' && (
+        <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[100]">
+          <div
+            className="flex items-center gap-1 h-8 px-1 rounded-full border shadow-[0_2px_12px_rgba(0,0,0,0.3)]"
+            style={{ background: 'rgba(30, 26, 22, 0.60)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderColor: 'rgba(255, 245, 235, 0.06)' }}
+          >
+            {(['feed', 'pipeline'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={`px-3 h-6 rounded-full text-[12px] font-[510] cursor-pointer transition-all duration-150 ${
+                  activeTab === tab ? 'bg-[rgba(255,245,235,0.10)] text-text' : 'text-text-tertiary hover:text-text-secondary'
+                }`}
+              >
+                {tab === 'feed' ? 'Feed' : 'Pipeline'}
+              </button>
+            ))}
+            <div className="w-px h-4 bg-border mx-0.5" />
+            <button
+              onClick={() => setTreeOpen(true)}
+              className="px-2 h-6 rounded-full text-[12px] font-[510] text-text-tertiary hover:text-text-secondary cursor-pointer transition-all duration-150"
+            >
+              <FolderTreeIcon className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={() => searchInputRef.current?.focus()}
+              className="px-2 h-6 rounded-full text-[12px] font-[510] text-text-tertiary hover:text-text-secondary cursor-pointer transition-all duration-150"
+            >
+              <Search className="w-3.5 h-3.5" />
+            </button>
           </div>
-          <div className="flex items-center gap-2.5 px-3 py-2 rounded-[5px] bg-bg-secondary border border-border-secondary transition-colors focus-within:border-border-tertiary" style={{ transitionDuration: '150ms' }}>
-            <Search className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
+        </div>
+      )}
+
+      {/* Content — full screen */}
+      <div className="h-full overflow-y-auto">
+        <div className="max-w-[640px] mx-auto px-5 sm:px-8 pt-14 pb-8">
+
+          {/* Hidden search input — activated by clicking search icon or pressing / */}
+          {(isSearching || searchQuery) && (
+            <div className="mb-4 flex items-center gap-2.5 px-3 py-2 rounded-[5px] bg-bg-secondary border border-border-secondary transition-colors focus-within:border-border-tertiary" style={{ transitionDuration: '150ms' }}>
+              <Search className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
               <input
                 ref={searchInputRef}
                 type="text"
@@ -691,40 +725,29 @@ export default function VaultPage() {
                 onChange={e => setSearchQuery(e.target.value)}
                 placeholder={searchPlaceholder}
                 className="flex-1 text-[13px] bg-transparent text-text placeholder:text-text-quaternary outline-none"
+                autoFocus
               />
-              {searchQuery ? (
-                <button onClick={() => { setSearchQuery(''); setSearchResults([]); }} className="p-1.5 rounded-xs hover:bg-hover transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }}>
-                  <X className="w-3.5 h-3.5 text-text-quaternary" />
-                </button>
-              ) : (
-                <kbd className="hidden sm:inline text-[9px] text-text-quaternary bg-bg-tertiary border border-border rounded-xs px-1.5 py-0.5 leading-none font-sans">/</kbd>
-              )}
+              <button onClick={() => { setSearchQuery(''); setSearchResults([]); }} className="p-1 rounded-xs hover:bg-hover transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }}>
+                <X className="w-3.5 h-3.5 text-text-quaternary" />
+              </button>
             </div>
-          </div>
-        </div>
+          )}
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="max-w-[640px] mx-auto px-5 sm:px-8 py-4">
-
-          {/* Search results — progressive: fuzzy → fast → enhanced */}
+          {/* Search results */}
           {isSearching && (
-            <div className="mb-8">
+            <div className="mb-6">
               {searchResults.length > 0 ? (
                 <div>
-                  <div className="flex items-center gap-2 mb-3 px-1">
-                    <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
-                      {searchResults.length} results
-                    </span>
+                  <div className="flex items-center gap-2 mb-2 px-1">
+                    <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">{searchResults.length} results</span>
                     {searching && searchTier !== 'enhanced' && (
                       <div className="flex items-center gap-1.5">
                         <div className="w-3 h-3 border-[1.5px] border-accent/30 border-t-accent rounded-full animate-spin" />
-                        <span className="text-[9px] text-text-quaternary">
-                          {searchTier === 'fuzzy' ? 'Searching...' : 'Refining...'}
-                        </span>
+                        <span className="text-[9px] text-text-quaternary">{searchTier === 'fuzzy' ? 'Searching...' : 'Refining...'}</span>
                       </div>
                     )}
                   </div>
-                  <div className="space-y-1">
+                  <div className="space-y-0.5">
                     {searchResults.map(r => (
                       <SearchResultCard key={r.path} result={r} onSelect={() => loadFile(r.path)} />
                     ))}
@@ -739,101 +762,52 @@ export default function VaultPage() {
                 <div className="flex flex-col items-center justify-center py-16">
                   <Search className="w-8 h-8 text-text-quaternary opacity-20 mb-3" />
                   <p className="text-[13px] font-serif text-text-quaternary">No results for "{searchQuery}"</p>
-                  <p className="text-[11px] text-text-quaternary mt-1">Try different keywords</p>
                 </div>
               )}
             </div>
           )}
 
-          {/* Knowledge section: TabBar + Feed/Pipeline */}
+          {/* Knowledge section content — immediate, no chrome */}
           {section === 'knowledge' && !isSearching && (
-            <>
-              <div className="flex items-center justify-between mb-5">
-                <TabBar
-                  tabs={[
-                    { id: 'feed', label: 'Feed' },
-                    { id: 'pipeline', label: 'Pipeline' },
-                  ]}
-                  active={activeTab}
-                  onChange={(id) => setActiveTab(id as 'feed' | 'pipeline')}
-                />
-                <button
-                  onClick={() => setTreeOpen(true)}
-                  className="flex items-center gap-1.5 px-2 h-7 rounded-[5px] text-[11px] text-text-quaternary hover:text-text-tertiary hover:bg-hover transition-colors cursor-pointer"
-                  style={{ transitionDuration: '80ms' }}
-                >
-                  <FolderTreeIcon className="w-3.5 h-3.5" />
-                  <span>Browse</span>
-                </button>
-              </div>
-              {activeTab === 'feed' ? (
-                <KnowledgeFeed onOpenFile={loadFile} />
-              ) : (
-                <KnowledgePipeline onOpenFile={loadFile} />
-              )}
-            </>
+            activeTab === 'feed' ? (
+              <KnowledgeFeed onOpenFile={loadFile} />
+            ) : (
+              <KnowledgePipeline onOpenFile={loadFile} />
+            )
           )}
 
-          {/* Other sections: existing browse (journal, logs) */}
+          {/* Journal / Logs — tree browse */}
           {section !== 'all' && section !== 'knowledge' && !isSearching && (
-            <>
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
-                  Browse
-                </span>
-                <button
-                  onClick={() => setTreeOpen(true)}
-                  className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer p-1 -m-1"
-                  style={{ transitionDuration: '80ms' }}
-                >
-                  <FolderTreeIcon className="w-3.5 h-3.5" />
-                  <span>Browse files</span>
-                </button>
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">{meta.title}</span>
               </div>
-              <div className="rounded-[7px] border border-border-secondary bg-bg-secondary p-3">
-                {filteredTree.length > 0 ? (
-                  <FolderTree
-                    nodes={filteredTree}
-                    selectedPath={selectedPath}
-                    onSelect={loadFile}
-                    expandedPaths={expandedPaths}
-                    onToggle={toggleFolder}
-                  />
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-12">
-                    <SectionIcon className="w-8 h-8 text-text-quaternary opacity-15 mb-3" />
-                    <p className="text-[13px] font-serif text-text-quaternary">Loading...</p>
-                  </div>
-                )}
-              </div>
-            </>
+              {filteredTree.length > 0 ? (
+                <FolderTree
+                  nodes={filteredTree}
+                  selectedPath={selectedPath}
+                  onSelect={loadFile}
+                  expandedPaths={expandedPaths}
+                  onToggle={toggleFolder}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-12">
+                  <SectionIcon className="w-8 h-8 text-text-quaternary opacity-15 mb-3" />
+                  <p className="text-[13px] font-serif text-text-quaternary">Loading...</p>
+                </div>
+              )}
+            </div>
           )}
 
-          {/* Base /vault route: collection cards */}
+          {/* Base /vault: collection cards */}
           {section === 'all' && !isSearching && (
-            <>
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-[10px] font-[590] uppercase tracking-[0.08em] text-text-quaternary">
-                  Collections
-                </span>
-                <button
-                  onClick={() => setTreeOpen(true)}
-                  className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer p-1 -m-1"
-                  style={{ transitionDuration: '80ms' }}
-                >
-                  <FolderTreeIcon className="w-3.5 h-3.5" />
-                  <span>Browse files</span>
-                </button>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
                 {collections.map(c => (
                   <CollectionCard
                     key={c.name}
                     collection={c}
-                    onClick={() => {
-                      setExpandedPaths(prev => new Set([...prev, c.name]));
-                      setTreeOpen(true);
-                    }}
+                    onClick={() => { setExpandedPaths(prev => new Set([...prev, c.name])); setTreeOpen(true); }}
                   />
                 ))}
               </div>
@@ -843,7 +817,7 @@ export default function VaultPage() {
                   <p className="text-[14px] font-serif text-text-tertiary">Connecting to vault...</p>
                 </div>
               )}
-            </>
+            </div>
           )}
         </div>
       </div>
