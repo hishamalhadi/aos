@@ -37,7 +37,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
   return (
     <div className="space-y-8">
       {/* Summary — sentence, not stats. DESIGN.md: "No stat dumps. The qareen speaks in sentences." */}
-      <p className="text-[13px] font-serif text-text-tertiary leading-[1.6]">
+      <p className="text-[13px] text-text-tertiary leading-[1.6]">
         {stats.total_documents} documents across the pipeline.
         {stats.unprocessed_captures > 0 && <> <span className="text-yellow">{stats.unprocessed_captures} unprocessed</span>.</>}
         {stats.synthesis_opportunities > 0 && <> <span className="text-accent">{stats.synthesis_opportunities} ready for synthesis</span>.</>}
@@ -49,7 +49,7 @@ export function KnowledgeFeed({ onOpenFile }: KnowledgeFeedProps) {
       {!hasWork && (
         <div className="flex flex-col items-center justify-center py-12">
           <CheckCircle2 className="w-8 h-8 text-green opacity-30 mb-3" />
-          <p className="text-[14px] font-serif text-text-tertiary">Knowledge is up to date</p>
+          <p className="text-[14px] text-text-tertiary">Knowledge is up to date</p>
           <p className="text-[12px] text-text-quaternary mt-1">Nothing needs attention right now</p>
         </div>
       )}

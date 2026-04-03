@@ -33,7 +33,7 @@ export function FeedItem({ path, title, stage, collection, isStale, onOpen, onPr
     >
       <FileText className="w-3.5 h-3.5 text-text-quaternary shrink-0 group-hover:text-accent transition-colors" style={{ transitionDuration: '80ms' }} />
       <div className="flex-1 min-w-0 flex items-center gap-2">
-        <span className="text-[13px] font-serif text-text-secondary group-hover:text-text truncate transition-colors" style={{ transitionDuration: '80ms' }}>
+        <span className="text-[13px] text-text-secondary group-hover:text-text truncate transition-colors" style={{ transitionDuration: '80ms' }}>
           {displayName}
         </span>
         {isStale && <AlertTriangle className="w-3 h-3 text-yellow shrink-0" />}

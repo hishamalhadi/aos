@@ -58,7 +58,7 @@ export function KnowledgeReader({ path, onBack, onNavigate, onBrowse }: Knowledg
   if (!file) {
     return (
       <div className="h-full flex flex-col bg-bg items-center justify-center">
-        <p className="text-[13px] font-serif text-text-quaternary">File not found</p>
+        <p className="text-[13px] text-text-quaternary">File not found</p>
         <button onClick={onBack} className="mt-3 text-[12px] text-accent hover:text-accent/80 transition-colors cursor-pointer" style={{ transitionDuration: '80ms' }}>
           Go back
         </button>
@@ -82,7 +82,7 @@ export function KnowledgeReader({ path, onBack, onNavigate, onBrowse }: Knowledg
             </button>
 
             {/* Title on mobile */}
-            <h1 className="sm:hidden text-[14px] font-serif font-[590] text-text truncate flex-1">
+            <h1 className="sm:hidden text-[14px] font-[590] text-text truncate flex-1">
               {title}
             </h1>
 
@@ -123,7 +123,7 @@ export function KnowledgeReader({ path, onBack, onNavigate, onBrowse }: Knowledg
         {/* Document content */}
         <div ref={contentRef} className="flex-1 overflow-y-auto">
           <div className="max-w-[720px] mx-auto px-5 sm:px-8 py-6 sm:py-10">
-            <h1 className="hidden sm:block text-[26px] font-serif font-[700] text-text tracking-[-0.025em] leading-[1.2]">
+            <h1 className="hidden sm:block text-[26px] font-[700] text-text tracking-[-0.025em] leading-[1.2]">
               {title}
             </h1>
 
