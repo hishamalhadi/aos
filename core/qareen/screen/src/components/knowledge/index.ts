@@ -4,3 +4,4 @@ export { PipelineCard } from './PipelineCard';
 export { KnowledgePipeline } from './KnowledgePipeline';
 export { ContextPanel } from './ContextPanel';
 export { FrontmatterEditor } from './FrontmatterEditor';
+export { KnowledgeReader } from './KnowledgeReader';
