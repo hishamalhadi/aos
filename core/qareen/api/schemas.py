@@ -481,10 +481,18 @@ class PersonResponse(BaseModel):
     importance: int = Field(3, description="Importance level 1-4 (1 = most important)")
     privacy_level: int = Field(0, description="Privacy level 0-3")
     tags: list[str] = Field(default_factory=list, description="Tags")
+    aliases: list[str] = Field(default_factory=list, description="Alternate names")
+    channels: dict[str, str] = Field(
+        default_factory=dict,
+        description="Channel → address mapping (e.g. {'whatsapp': '...', 'email': '...'})",
+    )
 
     organization: str | None = Field(None, description="Organization")
     role: str | None = Field(None, description="Role or title")
     city: str | None = Field(None, description="City")
+    notes: str | None = Field(None, description="Notes about this person")
+    birthday: str | None = Field(None, description="Birthday")
+    how_met: str | None = Field(None, description="How you met")
 
     last_contact: datetime | None = Field(None, description="Last interaction")
     days_since_contact: int | None = Field(None, description="Days since last contact")
@@ -507,10 +515,11 @@ class InteractionSchema(BaseModel):
     """A single interaction/touchpoint with a person."""
 
     id: str = Field(..., description="Interaction ID")
-    channel: ChannelType | None = Field(None, description="Communication channel")
+    channel: str = Field("unknown", description="Communication channel")
     direction: str = Field("inbound", description="inbound or outbound")
-    content_preview: str = Field("", description="Truncated content")
+    summary: str | None = Field(None, description="Interaction summary or content preview")
     timestamp: datetime | None = Field(None, description="When it happened")
+    message_count: int = Field(1, description="Number of messages in this interaction")
 
 
 class RelationshipSchema(BaseModel):
@@ -637,6 +646,26 @@ class VaultSearchRequest(BaseModel):
     collection: str | None = Field(None, description="Limit to collection")
     limit: int = Field(10, description="Max results", ge=1, le=50)
     min_score: float = Field(0.0, description="Minimum relevance score", ge=0.0, le=1.0)
+
+
+class PipelineStageInfo(BaseModel):
+    """Stats for a single pipeline stage."""
+
+    stage: int = Field(..., description="Stage number 1-6")
+    label: str = Field(..., description="Human label")
+    count: int = Field(0, description="Document count")
+    stale_count: int = Field(0, description="Documents older than 30 days without downstream")
+    items: list[VaultSearchResult] = Field(default_factory=list, description="Documents in this stage")
+
+
+class PipelineStatsResponse(BaseModel):
+    """Full pipeline health report."""
+
+    stages: list[PipelineStageInfo] = Field(default_factory=list)
+    total_documents: int = Field(0)
+    unprocessed_captures: int = Field(0, description="Stage 1-2 items older than 7 days")
+    synthesis_opportunities: int = Field(0, description="Research clusters ready for synthesis")
+    stale_decisions: int = Field(0, description="Decisions older than 60 days referenced by newer docs")
 
 
 # ---------------------------------------------------------------------------
