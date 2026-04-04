@@ -2,17 +2,17 @@ import { useState, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   ArrowLeft, Clock,
-  FileText, MessageSquare, Lightbulb, CheckCircle2,
+  CheckCircle2, Lightbulb, FileText,
   Loader2,
 } from 'lucide-react'
 import { AudioPlayer } from '@/components/companion/AudioPlayer'
 import { format } from 'date-fns'
 
 // ---------------------------------------------------------------------------
-// SessionDetail — full view of a completed session.
+// SessionDetail — review a completed session.
 //
 // Route: /sessions/:id
-// Data: /companion/meetings/:id (merged from both session tables)
+// Data: /companion/meetings/:id
 // ---------------------------------------------------------------------------
 
 interface TranscriptBlock {
@@ -34,15 +34,38 @@ interface SessionData {
   audio_path: string
 }
 
-type Tab = 'summary' | 'transcript' | 'notes'
-
 function formatDuration(seconds: number): string {
-  if (!seconds || seconds < 0) return '0m'
+  if (!seconds || seconds < 0) return '0s'
   if (seconds < 60) return `${seconds}s`
   const m = Math.floor(seconds / 60)
   if (m < 60) return `${m}m`
   const h = Math.floor(m / 60)
   return `${h}h ${m % 60}m`
+}
+
+/** Strip markdown boilerplate from old meeting summaries */
+function cleanSummary(raw: string): string {
+  if (!raw) return ''
+  return raw
+    .split('\n')
+    .filter(line => {
+      const trimmed = line.trim()
+      // Drop ALL markdown headers (##, ###)
+      if (/^#{1,4}\s/.test(trimmed)) return false
+      // Drop metadata lines (Duration: X | Date: Y | Participant: Z)
+      if (/^\*?\*?(Duration|Date|Participant|Participants):\*?\*?\s/i.test(trimmed)) return false
+      // Drop HRs
+      if (/^---+\s*$/.test(trimmed)) return false
+      // Drop markdown table syntax (pipes with dashes)
+      if (/^\|[-:\s|]+\|$/.test(trimmed)) return false
+      // Drop markdown table rows
+      if (/^\|.*\|$/.test(trimmed) && trimmed.includes('|')) return false
+      return true
+    })
+    .join('\n')
+    .replace(/^\n+/, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 export default function SessionDetail() {
@@ -51,30 +74,17 @@ export default function SessionDetail() {
   const [data, setData] = useState<SessionData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [activeTab, setActiveTab] = useState<Tab>('summary')
 
   useEffect(() => {
     if (!id) return
     let cancelled = false
-
     fetch(`/companion/meetings/${id}`)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(d => { if (!cancelled) { setData(d); setError(null) } })
       .catch(e => { if (!cancelled) setError(String(e)) })
       .finally(() => { if (!cancelled) setLoading(false) })
-
     return () => { cancelled = true }
   }, [id])
-
-  // Auto-select first available tab
-  useEffect(() => {
-    if (!data) return
-    if (data.summary) { setActiveTab('summary'); return }
-    if (data.transcript?.length) { setActiveTab('transcript'); return }
-    const noteCount = Object.values(data.notes || {}).reduce((n, items) => n + items.length, 0)
-    if (noteCount > 0) { setActiveTab('notes'); return }
-    setActiveTab('summary')
-  }, [data])
 
   const noteTopics = useMemo(() =>
     Object.entries(data?.notes || {}).filter(([, items]) => items.length > 0),
@@ -92,246 +102,157 @@ export default function SessionDetail() {
   if (error || !data) {
     return (
       <div className="max-w-[720px] mx-auto px-6 pt-10">
-        <button
-          onClick={() => navigate('/sessions')}
-          className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors mb-6 cursor-pointer"
-          style={{ transitionDuration: 'var(--duration-instant)' }}
-        >
-          <ArrowLeft className="w-3 h-3" />
-          Sessions
-        </button>
-        <p className="text-[13px] text-text-quaternary">{error ?? 'Session not found.'}</p>
+        <BackLink onClick={() => navigate('/sessions')} />
+        <p className="text-[13px] text-text-quaternary mt-6">{error ?? 'Session not found.'}</p>
       </div>
     )
   }
 
   const dateObj = data.date ? new Date(data.date) : null
-  const dateStr = dateObj ? format(dateObj, 'EEEE, MMMM d, yyyy') : ''
+  const dateStr = dateObj ? format(dateObj, 'EEE, MMM d') : ''
   const timeStr = dateObj ? format(dateObj, 'h:mm a') : ''
   const hasAudio = !!data.audio_path
+  const summary = cleanSummary(data.summary)
   const tasks = data.notes?.Tasks || data.notes?.tasks || []
   const ideas = data.notes?.Ideas || data.notes?.ideas || []
   const keyPoints = noteTopics.filter(([k]) => !['Tasks', 'Ideas', 'tasks', 'ideas'].includes(k))
-  const totalNotes = noteTopics.reduce((n, [, v]) => n + v.length, 0)
+  const hasNotes = tasks.length > 0 || ideas.length > 0 || keyPoints.length > 0
+  const hasTranscript = data.transcript?.length > 0
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[720px] mx-auto px-6 pt-10 pb-16">
-        {/* Back */}
-        <button
-          onClick={() => navigate('/sessions')}
-          className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors mb-6 cursor-pointer"
-          style={{ transitionDuration: 'var(--duration-instant)' }}
-        >
-          <ArrowLeft className="w-3 h-3" />
-          Sessions
-        </button>
+      <div className="max-w-[640px] mx-auto px-6 pt-10 pb-16">
+        <BackLink onClick={() => navigate('/sessions')} />
 
-        {/* Title + meta */}
-        <h1 className="text-[20px] font-[600] text-text mb-2 font-serif">{data.title}</h1>
+        {/* Title */}
+        <h1 className="text-[18px] font-[600] text-text mt-6 mb-1.5 leading-tight">
+          {data.title}
+        </h1>
 
-        <div className="flex items-center gap-3 flex-wrap mb-8 text-[11px] text-text-quaternary">
-          {dateStr && (
-            <span className="flex items-center gap-1.5">
-              <Clock className="w-3 h-3" />
-              {dateStr} at {timeStr}
-            </span>
-          )}
+        {/* Meta */}
+        <div className="flex items-center gap-2 text-[11px] text-text-quaternary mb-8">
+          <Clock className="w-3 h-3" />
+          <span>{dateStr} at {timeStr}</span>
           {data.duration_seconds > 0 && (
-            <span className="tabular-nums">{formatDuration(data.duration_seconds)}</span>
+            <>
+              <span className="text-border">·</span>
+              <span className="tabular-nums">{formatDuration(data.duration_seconds)}</span>
+            </>
           )}
-          {data.transcript?.length > 0 && (
-            <span className="tabular-nums">{data.transcript.length} segments</span>
+          {hasTranscript && (
+            <>
+              <span className="text-border">·</span>
+              <span className="tabular-nums">{data.transcript.length} segments</span>
+            </>
           )}
         </div>
 
-        {/* Audio */}
+        {/* Audio player — compact, no label */}
         {hasAudio && (
           <div className="mb-8">
             <AudioPlayer src={`/companion/meetings/${data.id}/audio`} />
           </div>
         )}
 
-        {/* Tabs */}
-        <div className="flex items-center gap-2 mb-6">
-          <TabPill
-            active={activeTab === 'summary'}
-            onClick={() => setActiveTab('summary')}
-            disabled={!data.summary}
-          >
-            Summary
-          </TabPill>
-          <TabPill
-            active={activeTab === 'transcript'}
-            onClick={() => setActiveTab('transcript')}
-            disabled={!data.transcript?.length}
-          >
-            Transcript{data.transcript?.length ? ` (${data.transcript.length})` : ''}
-          </TabPill>
-          <TabPill
-            active={activeTab === 'notes'}
-            onClick={() => setActiveTab('notes')}
-            disabled={totalNotes === 0}
-          >
-            Notes{totalNotes > 0 ? ` (${totalNotes})` : ''}
-          </TabPill>
-        </div>
+        {/* Summary */}
+        {summary && (
+          <div className="mb-8">
+            <div className="space-y-2">
+              {summary.split('\n').filter(l => l.trim()).map((line, i) => {
+                const trimmed = line.trim()
+                // Bullet points
+                if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
+                  const text = trimmed.slice(2)
+                    .replace(/\*\*(.+?)\*\*/g, '$1')
+                    .replace(/\*(.+?)\*/g, '$1')
+                  return (
+                    <div key={i} className="flex items-start gap-2.5 py-0.5">
+                      <div className="w-1 h-1 rounded-full bg-text-quaternary mt-[8px] shrink-0" />
+                      <p className="text-[13px] text-text-secondary leading-relaxed">{text}</p>
+                    </div>
+                  )
+                }
+                // Regular text
+                const text = trimmed
+                  .replace(/\*\*(.+?)\*\*/g, '$1')
+                  .replace(/\*(.+?)\*/g, '$1')
+                return (
+                  <p key={i} className="text-[13px] text-text-secondary leading-relaxed">
+                    {text}
+                  </p>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
-        {/* Content */}
-        <div className="min-h-[200px]">
-          {activeTab === 'summary' && <SummaryTab summary={data.summary} />}
-          {activeTab === 'transcript' && <TranscriptTab transcript={data.transcript} />}
-          {activeTab === 'notes' && <NotesTab keyPoints={keyPoints} tasks={tasks} ideas={ideas} />}
-        </div>
+        {/* Notes sections — inline, no tabs */}
+        {hasNotes && (
+          <div className="space-y-6 mb-8">
+            {/* Separator */}
+            <div className="border-t border-border" />
+
+            {tasks.length > 0 && (
+              <NoteSection
+                icon={<CheckCircle2 className="w-3.5 h-3.5 text-green" />}
+                title="Action items"
+                items={tasks}
+                dotColor="bg-green"
+              />
+            )}
+            {ideas.length > 0 && (
+              <NoteSection
+                icon={<Lightbulb className="w-3.5 h-3.5 text-yellow" />}
+                title="Ideas"
+                items={ideas}
+                dotColor="bg-yellow"
+              />
+            )}
+            {keyPoints.map(([topic, items]) => (
+              <NoteSection
+                key={topic}
+                icon={<FileText className="w-3.5 h-3.5 text-text-quaternary" />}
+                title={topic}
+                items={items}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Transcript — collapsible */}
+        {hasTranscript && (
+          <TranscriptSection transcript={data.transcript} />
+        )}
       </div>
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Tab pill
+// Components
 // ---------------------------------------------------------------------------
 
-function TabPill({
-  active,
-  onClick,
-  disabled,
-  children,
-}: {
-  active: boolean
-  onClick: () => void
-  disabled?: boolean
-  children: React.ReactNode
-}) {
+function BackLink({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      disabled={disabled}
-      className={`
-        h-7 px-3 rounded-full text-[11px] font-[510] cursor-pointer
-        transition-all
-        disabled:opacity-20 disabled:pointer-events-none
-        ${active
-          ? 'bg-bg-tertiary text-text-secondary border border-border-secondary'
-          : 'text-text-quaternary hover:text-text-tertiary hover:bg-hover border border-transparent'}
-      `}
+      className="flex items-center gap-1.5 text-[11px] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer"
       style={{ transitionDuration: 'var(--duration-instant)' }}
     >
-      {children}
+      <ArrowLeft className="w-3 h-3" />
+      Sessions
     </button>
   )
 }
 
-// ---------------------------------------------------------------------------
-// Summary — Garamond for reading surface
-// ---------------------------------------------------------------------------
-
-function SummaryTab({ summary }: { summary: string }) {
-  if (!summary) {
-    return (
-      <p className="text-[13px] text-text-quaternary py-8 text-center">
-        No summary for this session.
-      </p>
-    )
-  }
-
-  return (
-    <div
-      className="font-serif text-[14px] text-text-secondary leading-[1.7] space-y-3 session-prose"
-      dangerouslySetInnerHTML={{ __html: markdownToHtml(summary) }}
-    />
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Transcript
-// ---------------------------------------------------------------------------
-
-function TranscriptTab({ transcript }: { transcript: TranscriptBlock[] }) {
-  if (!transcript?.length) {
-    return (
-      <p className="text-[13px] text-text-quaternary py-8 text-center">
-        No transcript available.
-      </p>
-    )
-  }
-
-  return (
-    <div className="space-y-px">
-      {transcript.map((block, i) => (
-        <div
-          key={i}
-          className="flex gap-3 px-3 py-2 rounded-[5px] hover:bg-hover transition-colors"
-          style={{ transitionDuration: 'var(--duration-instant)' }}
-        >
-          <span className="text-[10px] text-text-quaternary font-mono tabular-nums shrink-0 w-[40px] pt-0.5">
-            {block.start_time}
-          </span>
-          <div className="min-w-0 flex-1">
-            <span className={`text-[10px] font-[600] ${block.speaker === 'You' ? 'text-accent' : 'text-blue'}`}>
-              {block.speaker}
-            </span>
-            <p className="text-[13px] text-text-secondary mt-0.5 leading-relaxed">
-              {block.text}
-            </p>
-          </div>
-        </div>
-      ))}
-    </div>
-  )
-}
-
-// ---------------------------------------------------------------------------
-// Notes
-// ---------------------------------------------------------------------------
-
-function NotesTab({
-  keyPoints,
-  tasks,
-  ideas,
-}: {
-  keyPoints: [string, string[]][]
-  tasks: string[]
-  ideas: string[]
-}) {
-  return (
-    <div className="space-y-6">
-      {tasks.length > 0 && (
-        <NoteSection
-          title="Action Items"
-          icon={<CheckCircle2 className="w-3.5 h-3.5 text-green" />}
-          items={tasks}
-          dotColor="bg-green"
-        />
-      )}
-      {ideas.length > 0 && (
-        <NoteSection
-          title="Ideas"
-          icon={<Lightbulb className="w-3.5 h-3.5 text-yellow" />}
-          items={ideas}
-          dotColor="bg-yellow"
-        />
-      )}
-      {keyPoints.map(([topic, items]) => (
-        <NoteSection
-          key={topic}
-          title={topic}
-          icon={<FileText className="w-3.5 h-3.5 text-text-quaternary" />}
-          items={items}
-        />
-      ))}
-    </div>
-  )
-}
-
 function NoteSection({
-  title,
   icon,
+  title,
   items,
   dotColor = 'bg-text-quaternary',
 }: {
-  title: string
   icon: React.ReactNode
+  title: string
   items: string[]
   dotColor?: string
 }) {
@@ -339,13 +260,12 @@ function NoteSection({
     <div>
       <div className="flex items-center gap-2 mb-2">
         {icon}
-        <span className="text-[12px] font-[510] text-text-secondary">{title}</span>
-        <span className="text-[10px] text-text-quaternary tabular-nums">({items.length})</span>
+        <span className="text-[11px] font-[510] text-text-tertiary">{title}</span>
       </div>
-      <div className="space-y-1 pl-1">
+      <div className="space-y-1 pl-6">
         {items.map((item, i) => (
           <div key={i} className="flex items-start gap-2 py-0.5">
-            <div className={`w-1.5 h-1.5 rounded-full ${dotColor} mt-[7px] shrink-0 opacity-60`} />
+            <div className={`w-1 h-1 rounded-full ${dotColor} mt-[8px] shrink-0 opacity-50`} />
             <p className="text-[13px] text-text-secondary leading-relaxed">{item}</p>
           </div>
         ))}
@@ -354,33 +274,51 @@ function NoteSection({
   )
 }
 
-// ---------------------------------------------------------------------------
-// Markdown → HTML
-// ---------------------------------------------------------------------------
+function TranscriptSection({ transcript }: { transcript: TranscriptBlock[] }) {
+  const [expanded, setExpanded] = useState(false)
 
-function markdownToHtml(md: string): string {
-  return md
-    .split('\n')
-    .map(line => {
-      if (line.startsWith('### ')) return `<h3>${esc(line.slice(4))}</h3>`
-      if (line.startsWith('## ')) return `<h2>${esc(line.slice(3))}</h2>`
-      if (line.startsWith('# ')) return `<h1>${esc(line.slice(2))}</h1>`
-      if (/^---+\s*$/.test(line)) return '<hr />'
-      if (/^\d+\.\s/.test(line)) return `<li>${inlineFmt(line.replace(/^\d+\.\s/, ''))}</li>`
-      if (line.startsWith('- ') || line.startsWith('* ')) return `<li>${inlineFmt(line.slice(2))}</li>`
-      if (!line.trim()) return '<br />'
-      return `<p>${inlineFmt(line)}</p>`
-    })
-    .join('\n')
-}
+  return (
+    <div>
+      <div className="border-t border-border mb-4" />
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-[11px] font-[510] text-text-quaternary hover:text-text-tertiary transition-colors cursor-pointer mb-3"
+        style={{ transitionDuration: 'var(--duration-instant)' }}
+      >
+        <span>{expanded ? '▾' : '▸'}</span>
+        <span>Transcript ({transcript.length} segments)</span>
+      </button>
 
-function inlineFmt(text: string): string {
-  return esc(text)
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-}
+      {expanded && (
+        <div className="space-y-px animate-[fadeIn_200ms_ease-out]">
+          {transcript.map((block, i) => (
+            <div
+              key={i}
+              className="flex gap-3 px-2 py-1.5 rounded-[5px] hover:bg-hover transition-colors"
+              style={{ transitionDuration: 'var(--duration-instant)' }}
+            >
+              <span className="text-[10px] text-text-quaternary font-mono tabular-nums shrink-0 w-[38px] pt-0.5">
+                {block.start_time}
+              </span>
+              <div className="min-w-0 flex-1">
+                <span className={`text-[10px] font-[600] ${block.speaker === 'You' ? 'text-accent' : 'text-blue'}`}>
+                  {block.speaker}
+                </span>
+                <p className="text-[12px] text-text-secondary mt-0.5 leading-relaxed">
+                  {block.text}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+      `}</style>
+    </div>
+  )
 }

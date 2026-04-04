@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["meetings"])
 
 DB_PATH = Path.home() / ".aos" / "data" / "qareen.db"
+MEETINGS_DIR = Path.home() / ".aos" / "meetings"
 VAULT_DIR = Path.home() / "vault"
 
 # ---------------------------------------------------------------------------
@@ -89,6 +90,14 @@ def _parse_row(row) -> dict:
     if started and ended:
         try: duration = int((datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds())
         except ValueError: pass
+    # Resolve audio path — check outcome, then probe filesystem
+    audio_path = outcome.get("audio_path", "")
+    if not audio_path:
+        # Old companion stored WAVs at ~/.aos/meetings/meeting-{id}.wav
+        candidate = MEETINGS_DIR / f"meeting-{row['id']}.wav"
+        if candidate.exists():
+            audio_path = str(candidate)
+
     return {
         "id": row["id"], "title": outcome.get("title", "Untitled Meeting"),
         "date": started, "duration_seconds": duration,
@@ -98,7 +107,7 @@ def _parse_row(row) -> dict:
         "transcript": outcome.get("transcript", []),
         "notes": outcome.get("notes", {}),
         "participants": outcome.get("participants", []),
-        "audio_path": outcome.get("audio_path", ""),
+        "audio_path": audio_path,
     }
 
 def _list_sessions(limit: int = 50) -> list[dict]:
