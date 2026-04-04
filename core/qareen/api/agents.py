@@ -7,9 +7,11 @@ from __future__ import annotations
 
 import logging
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Request, status
 from fastapi import Path as PathParam
 from fastapi.responses import JSONResponse
@@ -207,13 +209,63 @@ async def get_agent(
     )
 
 
+@router.post("/community/install", status_code=status.HTTP_201_CREATED)
+async def install_community_agent(request: Request) -> JSONResponse:
+    """Install a community agent by downloading its .md from GitHub."""
+    body = await request.json()
+    repo = body.get("repo")  # e.g. "msitarzewski/agency-agents"
+    file_path = body.get("file")  # e.g. "engineering/engineering-frontend-developer.md"
+    agent_id = body.get("id")  # e.g. "c-frontend-dev"
+
+    if not repo or not file_path or not agent_id:
+        return JSONResponse({"error": "Missing repo, file, or id"}, status_code=400)
+
+    # Sanitize agent_id
+    safe_id = re.sub(r"[^a-zA-Z0-9_-]", "", agent_id)
+    if not safe_id:
+        return JSONResponse({"error": "Invalid agent ID"}, status_code=400)
+
+    target_path = AGENTS_DIR / f"{safe_id}.md"
+    if target_path.exists():
+        return JSONResponse({"error": f"Agent '{safe_id}' is already installed"}, status_code=409)
+
+    # Download from GitHub raw content
+    url = f"https://raw.githubusercontent.com/{repo}/main/{file_path}"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.get(url)
+            if resp.status_code != 200:
+                return JSONResponse(
+                    {"error": f"Failed to fetch from GitHub: {resp.status_code}"},
+                    status_code=502,
+                )
+            content = resp.text
+    except httpx.HTTPError as exc:
+        return JSONResponse({"error": f"GitHub fetch error: {exc}"}, status_code=502)
+
+    # Write to agents directory
+    AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(content, encoding="utf-8")
+    logger.info("Installed community agent '%s' from %s/%s", safe_id, repo, file_path)
+
+    # Parse and return
+    data = _parse_agent_md(target_path)
+    return JSONResponse(
+        {"ok": True, "id": safe_id, "name": data.get("name", safe_id), "installed": True},
+        status_code=201,
+    )
+
+
 @router.post("/{agent_id}/activate", response_model=AgentResponse, status_code=status.HTTP_201_CREATED)
 async def activate_agent(
     request: Request,
     agent_id: str = PathParam(..., description="Catalog agent ID to activate"),
 ) -> AgentResponse | JSONResponse:
-    """Activate an agent from the catalog."""
-    # Find in catalog
+    """Activate an agent from the catalog by copying it to ~/.claude/agents/."""
+    target_path = AGENTS_DIR / f"{agent_id}.md"
+    if target_path.exists():
+        return JSONResponse({"error": f"Agent '{agent_id}' is already installed"}, status_code=409)
+
     catalog_path = CATALOG_DIR / f"{agent_id}.md"
     if not catalog_path.is_file():
         catalog_path = CATALOG_DIR / agent_id / "agent.md"
@@ -224,7 +276,10 @@ async def activate_agent(
     if not data:
         return JSONResponse({"error": f"Could not parse agent: {agent_id}"}, status_code=500)
 
-    data["is_active"] = True
+    AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(str(catalog_path), str(target_path))
+    logger.info("Activated agent '%s': %s → %s", agent_id, catalog_path, target_path)
+
     return AgentResponse(
         id=data["id"],
         name=data["name"],
