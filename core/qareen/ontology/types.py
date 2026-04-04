@@ -165,6 +165,7 @@ class Person:
     importance: int = 3  # 1-4, 1 = most important
     privacy_level: int = 0  # 0 = open, 3 = no AI analysis
     tags: list[str] = field(default_factory=list)
+    aliases: list[str] = field(default_factory=list)  # alternate names/nicknames
 
     # Contact info (from person_identifiers table)
     email: str | None = None
@@ -172,12 +173,16 @@ class Person:
     whatsapp_jid: str | None = None
     telegram_id: str | None = None
 
+    # Derived: channel → address mapping for the frontend
+    channels: dict[str, str] = field(default_factory=dict)
+
     # Metadata (from contact_metadata table)
     organization: str | None = None
     role: str | None = None
     city: str | None = None
     how_met: str | None = None
     birthday: str | None = None
+    notes: str | None = None
 
     # Relationship state (computed)
     last_contact: datetime | None = None
