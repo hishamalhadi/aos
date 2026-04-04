@@ -26,7 +26,7 @@ const SCREEN_NAMES: Record<string, string> = {
   analytics: 'Analytics',
   config: 'Config',
   channels: 'Channels',
-  chief: 'Chief',
+  chat: 'Chat',
   meeting: 'Meeting',
 };
 
