@@ -117,13 +117,13 @@ function ApprovalCard({
         </div>
 
         {/* Title + body */}
-        <h3 className="text-[14px] font-[560] text-text tracking-[-0.01em] mb-1.5 font-serif">{card.title}</h3>
-        <p className="text-[12px] text-text-tertiary leading-[1.6] mb-3 line-clamp-2 font-serif">{card.body}</p>
+        <h3 className="text-[14px] font-[560] text-text tracking-[-0.01em] mb-1.5">{card.title}</h3>
+        <p className="text-[12px] text-text-tertiary leading-[1.6] mb-3 line-clamp-2">{card.body}</p>
 
         {/* Source utterance */}
         {card.source_utterance && (
           <div className="mb-4 border-l-2 border-accent/40 pl-3 py-0.5">
-            <p className="text-[11px] text-text-quaternary italic font-serif leading-relaxed">"{card.source_utterance}"</p>
+            <p className="text-[11px] text-text-quaternary italic leading-relaxed">"{card.source_utterance}"</p>
           </div>
         )}
 
@@ -216,7 +216,7 @@ export default function ApprovalsPage() {
   const pendingCount = cards.filter(c => c.status === 'pending').length;
 
   return (
-    <div className="bg-bg min-h-full">
+    <div className="min-h-full">
       <div className="px-6 md:px-10 py-6 md:py-8 max-w-[1200px] mx-auto overflow-y-auto h-full">
 
         {/* Page header */}
@@ -238,7 +238,7 @@ export default function ApprovalsPage() {
         {error && (
           <div className="flex items-center gap-3 bg-red-muted rounded-[7px] px-5 py-3.5 mb-6 border border-red/20">
             <AlertTriangle className="w-4 h-4 text-red shrink-0" />
-            <span className="text-[13px] text-red flex-1 font-serif">Failed to load approval queue.</span>
+            <span className="text-[13px] text-red flex-1">Failed to load approval queue.</span>
             <button
               type="button"
               onClick={loadCards}
