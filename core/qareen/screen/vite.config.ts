@@ -19,7 +19,7 @@ export default defineConfig({
     allowedHosts: true, // Allow all hosts (Tailscale, IP, hostname)
     proxy: {
       '/api/stream': {
-        target: 'http://localhost:7700',
+        target: 'http://localhost:4096',
         changeOrigin: true,
         // SSE requires no buffering and no timeout
         configure: (proxy) => {
@@ -31,15 +31,15 @@ export default defineConfig({
         },
       },
       '/api': {
-        target: 'http://localhost:7700',
+        target: 'http://localhost:4096',
         changeOrigin: true,
       },
       '/ws': {
-        target: 'http://localhost:7700',
+        target: 'http://localhost:4096',
         ws: true,
       },
       '/companion/stream': {
-        target: 'http://localhost:7700',
+        target: 'http://localhost:4096',
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyRes', (proxyRes) => {
@@ -48,14 +48,13 @@ export default defineConfig({
           });
         },
       },
-      // CENTCOM meetings data lives on the companion service (port 7603)
       '/companion/meetings': {
         target: 'http://localhost:7603',
         changeOrigin: true,
-        rewrite: (path) => path.replace('/companion/meetings', '/meetings'),
+        rewrite: (path: string) => path.replace('/companion/meetings', '/meetings'),
       },
       '/companion': {
-        target: 'http://localhost:7700',
+        target: 'http://localhost:4096',
         changeOrigin: true,
       },
     },

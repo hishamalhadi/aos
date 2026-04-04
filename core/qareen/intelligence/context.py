@@ -9,8 +9,10 @@ Also provides a briefing builder for the initial page load.
 
 from __future__ import annotations
 
+import json as _json
 import logging
 import sqlite3
+import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -271,8 +273,7 @@ async def assemble_context(
             except Exception as e:
                 logger.debug("Project context failed for %s: %s", project_name, e)
 
-    # --- Surface topic context (vault search is expensive, skip for now) ---
-    # TODO: Add fast topic lookup once QMD MCP is wired to ontology.search()
+    # --- Surface topic context (vault search via QMD) ---
     for entity in entities:
         if entity.entity_type == "topic" and entity.value:
             topic = entity.value
@@ -281,11 +282,42 @@ async def assemble_context(
                 continue
             surfaced.add(key)
 
-            # Push a lightweight topic card without vault search
+            # Search vault via QMD for related notes
+            vault_results = []
+            try:
+                result = subprocess.run(
+                    ["qmd", "query", topic, "-n", "3", "--json"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    data = _json.loads(result.stdout)
+                    if isinstance(data, list):
+                        vault_results = data[:3]
+                    elif isinstance(data, dict) and "results" in data:
+                        vault_results = data["results"][:3]
+            except Exception as e:
+                logger.debug("QMD search failed for topic '%s': %s", topic, e)
+
+            # Build context card with vault results
+            related_notes = []
+            for r in vault_results:
+                title = r.get("title", r.get("path", ""))
+                snippet = r.get("snippet", r.get("content", ""))[:150]
+                score = r.get("score", 0)
+                if score > 0.3:  # Only include relevant results
+                    related_notes.append({
+                        "title": title,
+                        "snippet": snippet,
+                        "path": r.get("path", ""),
+                        "score": round(score, 2),
+                    })
+
             await push_event("context", {
                 "id": f"topic-{hash(topic) % 100000}",
                 "context_type": "topic",
                 "title": topic[:50],
+                "related_notes": related_notes,
+                "has_vault_context": len(related_notes) > 0,
                 "timestamp": datetime.now().isoformat(),
             })
 
@@ -450,29 +482,86 @@ async def build_briefing(ontology) -> dict[str, Any] | None:
         if active_count == 0 and todo_count > 0:
             summary += f" {todo_count} task{'s' if todo_count != 1 else ''} in your queue."
 
-        # Attention items
+        # Overdue tasks (have due_at in the past)
+        overdue_tasks = []
+        now_str = datetime.now().isoformat()
+        for t in todo_tasks + active_tasks:
+            due = getattr(t, "due_at", None)
+            if due and str(due) < now_str and getattr(t, "status", "") != "done":
+                overdue_tasks.append(t)
+
+        if overdue_tasks:
+            summary += f" {len(overdue_tasks)} overdue."
+
+        # Attention items — priority: overdue > urgent > active
         attention = []
+        for t in overdue_tasks[:3]:
+            due = getattr(t, "due_at", "")
+            attention.append({
+                "type": "overdue",
+                "text": f"Overdue: {getattr(t, 'title', 'untitled')}",
+                "detail": f"Due: {str(due)[:10]}" if due else "",
+            })
         for t in urgent:
             pri = getattr(t, "priority", 3)
-            # Handle enum or int priority
             pri_val = pri.value if hasattr(pri, "value") else pri
-            attention.append(f"P{pri_val}: {getattr(t, 'title', 'untitled')}")
+            attention.append({
+                "type": "urgent",
+                "text": f"P{pri_val}: {getattr(t, 'title', 'untitled')}",
+            })
         for t in active_tasks[:3]:
-            attention.append(f"Active: {getattr(t, 'title', 'untitled')}")
+            attention.append({
+                "type": "active",
+                "text": f"Active: {getattr(t, 'title', 'untitled')}",
+            })
+
+        # Relationship drift alerts — people drifting or dormant
+        drift_alerts = []
+        try:
+            people_db = Path.home() / ".aos" / "data" / "people.db"
+            if people_db.exists():
+                conn = sqlite3.connect(str(people_db))
+                conn.row_factory = sqlite3.Row
+                # Find important people (importance <= 2) who haven't been contacted in 14+ days
+                rows = conn.execute("""
+                    SELECT name, importance, days_since_contact, trajectory
+                    FROM people
+                    WHERE importance <= 2
+                      AND days_since_contact > 14
+                      AND trajectory IN ('drifting', 'dormant')
+                    ORDER BY importance, days_since_contact DESC
+                    LIMIT 3
+                """).fetchall()
+                conn.close()
+                for row in rows:
+                    drift_alerts.append({
+                        "type": "drift",
+                        "text": f"{row['name']} — {row['trajectory']} ({row['days_since_contact']}d)",
+                    })
+                    attention.append({
+                        "type": "drift",
+                        "text": f"Drifting: {row['name']} ({row['days_since_contact']}d no contact)",
+                    })
+        except Exception as e:
+            logger.debug("Drift alert query failed: %s", e)
 
         # Metrics
         metrics = {
-            "active": active_count,
-            "todo": todo_count,
-            "urgent": urgent_count,
+            "active_tasks": active_count,
+            "todo_tasks": todo_count,
+            "urgent_tasks": urgent_count,
+            "overdue_tasks": len(overdue_tasks),
             "projects": len(projects),
+            "drift_alerts": len(drift_alerts),
         }
 
         return {
             "id": str(uuid.uuid4())[:8],
             "summary": summary,
-            "schedule": [],  # Would come from calendar integration
-            "attention": attention[:5],
+            "greeting": f"{greeting}, {name}.",
+            "schedule": [],  # Calendar integration future
+            "attention": attention[:8],
+            "drift_alerts": drift_alerts,
             "metrics": metrics,
             "timestamp": datetime.now().isoformat(),
         }

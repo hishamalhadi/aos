@@ -14,6 +14,8 @@ from .mcp_location import McpLocationCheck
 from .runtime_protection import RuntimeProtectionCheck
 from .storage_layout import StorageLayoutCheck
 from .symlinks import AgentSymlinkCheck, RuleSymlinkCheck, SkillSymlinkCheck
+from .n8n import N8nServiceCheck
+from .qareen import QareenServiceCheck
 from .transcriber import TranscriberServiceCheck
 
 # Add new checks here — they run in this order on every update cycle.
@@ -48,6 +50,12 @@ ALL_CHECKS = [
 
     # Services — transcriber running and healthy
     TranscriberServiceCheck,
+
+    # Services — n8n automation engine running and healthy
+    N8nServiceCheck,
+
+    # Services — Qareen intelligence core running and healthy on port 4096
+    QareenServiceCheck,
 
     # Initiative pipeline + Bridge v2 infrastructure
     InitiativeDirectoriesCheck,

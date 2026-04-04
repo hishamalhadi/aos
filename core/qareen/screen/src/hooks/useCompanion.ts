@@ -740,31 +740,112 @@ export function useCompanion() {
     if (sessionInitialized.current) return
     sessionInitialized.current = true
 
-    const existingSessionId = useCompanionStore.getState().sessionId
-    if (existingSessionId) {
-      // Verify the existing session is still active
-      fetch('/companion/session')
-        .then((r) => (r.ok ? r.json() : null))
-        .then((data) => {
-          if (data?.session?.status === 'active') {
-            return
-          }
-          return fetch('/companion/session/start', { method: 'POST' })
-            .then((r) => r.json())
-            .then((session) => {
-              if (session?.id) setSessionId(session.id)
-            })
-        })
-        .catch(() => {})
-    } else {
-      fetch('/companion/session/start', { method: 'POST' })
-        .then((r) => r.json())
-        .then((session) => {
-          if (session?.id) setSessionId(session.id)
-        })
-        .catch(() => {})
-    }
+    // Always check backend for an active session first
+    fetch('/companion/session')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (data && data.status === 'active') {
+          // Active session exists — set ID so SSE event recovery works.
+          // Full state restore (transcript, notes, cards) handled by the
+          // separate sessionRestored effect below.
+          setSessionId(data.id)
+          return
+        }
+        // No active session — start a fresh one
+        return fetch('/companion/session/start', { method: 'POST' })
+          .then((r) => r.json())
+          .then((session) => {
+            if (session?.id) setSessionId(session.id)
+          })
+      })
+      .catch(() => {})
   }, [setSessionId])
+
+  // -------------------------------------------------------------------------
+  // Restore active session from backend on mount (survives page refresh)
+  // -------------------------------------------------------------------------
+  const sessionRestored = useRef(false)
+  useEffect(() => {
+    if (sessionRestored.current) return
+    sessionRestored.current = true
+    let cancelled = false
+
+    async function restoreSession() {
+      try {
+        const res = await fetch('/companion/session')
+        if (!res.ok) return
+        const data = await res.json()
+
+        if (cancelled || !data || data.status !== 'active') return
+
+        // Only restore if store has no session (e.g. after page refresh cleared sessionStorage)
+        const storeState = useCompanionStore.getState()
+        if (storeState.session) return
+
+        // Map backend dict → SessionState
+        storeState.setSession({
+          id: data.id,
+          title: data.title || 'Restored Session',
+          type: data.session_type || 'conversation',
+          skill: data.skill ?? null,
+          startedAt: data.started_at,
+          status: 'active',
+          stats: {
+            processed: data.utterance_count || 0,
+            total: data.utterance_count || 0,
+            approved: data.approvals_approved || 0,
+          },
+        })
+
+        // Also set the sessionId for SSE event recovery
+        if (data.id) {
+          storeState.setSessionId(data.id)
+        }
+
+        // Restore transcript segments
+        if (data.transcript_json && Array.isArray(data.transcript_json)) {
+          for (const block of data.transcript_json) {
+            if (cancelled) return
+            storeState.addSegment({
+              id: `restored-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              speaker: block.speaker || 'You',
+              text: block.text || '',
+              timestamp: block.timestamp || new Date().toISOString(),
+              isProvisional: false,
+            })
+          }
+        }
+
+        // Restore note groups
+        if (data.notes_json && Array.isArray(data.notes_json)) {
+          for (const group of data.notes_json) {
+            if (cancelled) return
+            storeState.addNoteGroup(group)
+          }
+        }
+
+        // Restore cards as approvals
+        if (data.cards_json && Array.isArray(data.cards_json)) {
+          for (const card of data.cards_json) {
+            if (cancelled) return
+            storeState.addCard(card)
+          }
+        }
+      } catch {
+        // Silent fail — session restore is best-effort
+      }
+    }
+
+    // Small delay to let SSE connect first
+    const timer = setTimeout(() => {
+      if (!cancelled) restoreSession()
+    }, 500)
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [])
 
   // Fetch initial briefing on mount
   const briefingFetched = useRef(false)
