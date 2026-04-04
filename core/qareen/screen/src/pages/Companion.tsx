@@ -57,8 +57,8 @@ export default function Companion() {
 
   // Session end review state
   const [endedSession, setEndedSession] = useState<SessionState | null>(null)
-  const [endedNoteGroups, setEndedNoteGroups] = useState(noteGroups)
-  const [endedApprovals, setEndedApprovals] = useState(approvals)
+  const [endedNoteGroups, setEndedNoteGroups] = useState<typeof noteGroups>([])
+  const [endedApprovals, setEndedApprovals] = useState<typeof approvals>([])
 
   // Transition animation tracking
   const [phase, setPhase] = useState<TransitionPhase>('idle')
@@ -221,8 +221,15 @@ export default function Companion() {
     clearContextCards()
   }, [clearSegments, clearNoteGroups, clearApprovals, clearCards, clearStream, clearContextCards])
 
-  // Send text
-  const handleSendText = useCallback((_text: string) => {}, [])
+  // Send text — POST to intelligence engine for processing
+  const handleSendText = useCallback((text: string) => {
+    if (!text.trim()) return
+    fetch('/companion/input', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: text.trim(), source: 'text' }),
+    }).catch(() => {})
+  }, [])
 
   // Approval handlers
   const handleApprove = useCallback((id: string) => { approve(id) }, [approve])
