@@ -12,10 +12,10 @@ interface MarkdownRendererProps {
 }
 
 const headingStyles = {
-  h1: 'text-[24px] font-serif font-[700] text-text tracking-[-0.02em] mt-10 mb-4 pb-3 border-b border-border',
-  h2: 'text-[19px] font-serif font-[650] text-text tracking-[-0.015em] mt-8 mb-3',
-  h3: 'text-[16px] font-serif font-[600] text-text tracking-[-0.01em] mt-6 mb-2',
-  h4: 'text-[14px] font-serif font-[600] text-text mt-4 mb-1.5',
+  h1: 'text-[24px] font-[700] text-text tracking-[-0.02em] mt-10 mb-4 pb-3 border-b border-border',
+  h2: 'text-[19px] font-[650] text-text tracking-[-0.015em] mt-8 mb-3',
+  h3: 'text-[16px] font-[600] text-text tracking-[-0.01em] mt-6 mb-2',
+  h4: 'text-[14px] font-[600] text-text mt-4 mb-1.5',
 };
 
 function buildComponents(compact: boolean): Components {
@@ -27,8 +27,8 @@ function buildComponents(compact: boolean): Components {
     h1: ({ children }) => <h1 className={h1Style}>{children}</h1>,
     h2: ({ children }) => <h2 className={h2Style}>{children}</h2>,
     h3: ({ children }) => <h3 className={h3Style}>{children}</h3>,
-    p: ({ children }) => <p className="text-[15px] font-serif leading-[1.75] text-text-secondary mb-4">{children}</p>,
-    li: ({ children }) => <li className="text-[15px] font-serif leading-[1.75] text-text-secondary mb-1">{children}</li>,
+    p: ({ children }) => <p className="text-[15px] leading-[1.75] text-text-secondary mb-4">{children}</p>,
+    li: ({ children }) => <li className="text-[15px] leading-[1.75] text-text-secondary mb-1">{children}</li>,
     ul: ({ children }) => <ul className="list-disc pl-5 mb-4 space-y-0.5">{children}</ul>,
     ol: ({ children }) => <ol className="list-decimal pl-5 mb-4 space-y-0.5">{children}</ol>,
     a: ({ href, children }) => (
@@ -41,7 +41,7 @@ function buildComponents(compact: boolean): Components {
       </a>
     ),
     blockquote: ({ children }) => (
-      <blockquote className="border-l-[3px] border-accent/30 pl-4 my-4 text-text-tertiary italic font-serif">
+      <blockquote className="border-l-[3px] border-accent/30 pl-4 my-4 text-text-tertiary italic">
         {children}
       </blockquote>
     ),
@@ -100,7 +100,7 @@ function buildComponents(compact: boolean): Components {
           className="rounded-[7px] border border-border max-w-full"
         />
         {alt && (
-          <figcaption className="text-[12px] text-text-tertiary mt-2 text-center font-serif italic">
+          <figcaption className="text-[12px] text-text-tertiary mt-2 text-center italic">
             {alt}
           </figcaption>
         )}

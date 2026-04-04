@@ -14,3 +14,4 @@ export { TabBar } from "./TabBar";
 export { Skeleton, SkeletonRows, SkeletonCards } from "./Skeleton";
 export { ErrorBanner } from "./ErrorBanner";
 export { MarkdownRenderer } from "./MarkdownRenderer";
+export { FloatingSidebar } from "./FloatingSidebar";
