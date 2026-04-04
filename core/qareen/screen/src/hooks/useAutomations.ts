@@ -180,6 +180,25 @@ export function useDeactivateAutomation() {
   });
 }
 
+export interface AutomationContext {
+  telegram_chat_id: string | null;
+  connected_accounts: string[];
+  operator_name: string | null;
+  timezone: string | null;
+}
+
+export function useAutomationContext() {
+  return useQuery({
+    queryKey: ['automation-context'],
+    queryFn: async (): Promise<AutomationContext> => {
+      const res = await fetch('/api/automations/context');
+      if (!res.ok) return { telegram_chat_id: null, connected_accounts: [], operator_name: null, timezone: null };
+      return res.json();
+    },
+    staleTime: 300_000, // Context rarely changes
+  });
+}
+
 export function useExecutionHistory(automationId: string | null) {
   return useQuery({
     queryKey: ['execution-history', automationId],

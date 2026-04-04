@@ -1,7 +1,5 @@
 """Qareen API — Automations routes.
 
-Unified view of system crons + user-created automations + n8n-powered workflows.
-User automations stored in ~/.aos/config/automations.yaml.
 System crons read from ~/aos/config/crons.yaml + status.json.
 n8n-powered automations tracked in qareen.db via the automations table.
 """
@@ -27,7 +25,6 @@ AOS_HOME = Path.home() / "aos"
 AOS_DATA = Path.home() / ".aos"
 CRONS_YAML = AOS_HOME / "config" / "crons.yaml"
 CRONS_STATUS = AOS_DATA / "logs" / "crons" / "status.json"
-USER_AUTOMATIONS = AOS_DATA / "config" / "automations.yaml"
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -41,13 +38,6 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to load YAML: %s", path)
         return {}
-
-
-def _save_yaml(path: Path, data: dict[str, Any]) -> None:
-    import yaml
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w") as f:
-        yaml.dump(data, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
 
 
 def _load_status() -> dict[str, Any]:
@@ -119,32 +109,7 @@ TIER_LABELS = {
 
 @router.get("")
 async def list_automations(request: Request) -> JSONResponse:
-    """List all automations — user-created first, then system crons."""
-
-    # ── User automations
-    user_data = _load_yaml(USER_AUTOMATIONS)
-    user_items = []
-    for item in user_data.get("automations", []):
-        if not isinstance(item, dict):
-            continue
-        user_items.append({
-            "id": item.get("id", ""),
-            "name": item.get("name", ""),
-            "description": item.get("description", ""),
-            "prompt": item.get("prompt", ""),
-            "frequency": item.get("frequency", "manual"),
-            "at": item.get("at"),
-            "weekday": item.get("weekday"),
-            "agent": item.get("agent", "chief"),
-            "enabled": item.get("enabled", True),
-            "notify": item.get("notify", True),
-            "type": "user",
-            "schedule_human": _human_schedule(item),
-            "last_run": item.get("last_run"),
-            "last_run_ago": _time_ago(item.get("last_run")),
-            "last_status": item.get("last_status"),
-            "created": item.get("created"),
-        })
+    """List system crons."""
 
     # ── System crons
     crons_data = _load_yaml(CRONS_YAML)
@@ -175,97 +140,16 @@ async def list_automations(request: Request) -> JSONResponse:
         })
 
     return JSONResponse({
-        "user": user_items,
         "system": system_items,
-        "total": len(user_items) + len(system_items),
+        "total": len(system_items),
     })
-
-
-@router.post("")
-async def create_automation(request: Request) -> JSONResponse:
-    """Create a user automation."""
-    body = await request.json()
-
-    name = body.get("name", "").strip()
-    if not name:
-        return JSONResponse({"error": "name is required"}, status_code=400)
-
-    automation = {
-        "id": f"ua_{uuid.uuid4().hex[:8]}",
-        "name": name,
-        "description": body.get("description", "").strip(),
-        "prompt": body.get("prompt", "").strip(),
-        "frequency": body.get("frequency", "manual"),
-        "at": body.get("at"),
-        "weekday": body.get("weekday"),
-        "agent": body.get("agent", "chief"),
-        "enabled": True,
-        "notify": body.get("notify", True),
-        "created": datetime.utcnow().isoformat(),
-        "last_run": None,
-        "last_status": None,
-    }
-
-    data = _load_yaml(USER_AUTOMATIONS)
-    if "automations" not in data:
-        data["automations"] = []
-    data["automations"].append(automation)
-    _save_yaml(USER_AUTOMATIONS, data)
-
-    return JSONResponse(automation, status_code=201)
-
-
-@router.patch("/{automation_id}")
-async def update_automation(automation_id: str, request: Request) -> JSONResponse:
-    """Update a user automation (toggle enabled, edit fields)."""
-    body = await request.json()
-
-    if automation_id.startswith("sys_"):
-        # System cron toggle — update crons.yaml enabled field
-        cron_name = automation_id[4:]
-        crons_data = _load_yaml(CRONS_YAML)
-        jobs = crons_data.get("jobs", {})
-        if cron_name in jobs:
-            if "enabled" in body:
-                jobs[cron_name]["enabled"] = body["enabled"]
-                _save_yaml(CRONS_YAML, crons_data)
-                return JSONResponse({"status": "ok", "enabled": body["enabled"]})
-        return JSONResponse({"error": "not found"}, status_code=404)
-
-    # User automation
-    data = _load_yaml(USER_AUTOMATIONS)
-    for item in data.get("automations", []):
-        if item.get("id") == automation_id:
-            for key in ("name", "description", "prompt", "frequency", "at", "weekday", "agent", "enabled", "notify"):
-                if key in body:
-                    item[key] = body[key]
-            _save_yaml(USER_AUTOMATIONS, data)
-            return JSONResponse({"status": "ok"})
-
-    return JSONResponse({"error": "not found"}, status_code=404)
-
-
-@router.delete("/{automation_id}")
-async def delete_automation(automation_id: str, request: Request) -> JSONResponse:
-    """Delete a user automation."""
-    if automation_id.startswith("sys_"):
-        return JSONResponse({"error": "cannot delete system automations"}, status_code=400)
-
-    data = _load_yaml(USER_AUTOMATIONS)
-    before = len(data.get("automations", []))
-    data["automations"] = [a for a in data.get("automations", []) if a.get("id") != automation_id]
-    if len(data["automations"]) == before:
-        return JSONResponse({"error": "not found"}, status_code=404)
-
-    _save_yaml(USER_AUTOMATIONS, data)
-    return JSONResponse({"status": "ok"})
 
 
 @router.post("/{automation_id}/run")
 async def run_automation(automation_id: str, request: Request) -> JSONResponse:
     """Manually trigger an automation."""
     if automation_id.startswith("sys_"):
-        # Trigger system cron via the existing cron trigger endpoint
+        # Trigger system cron directly
         cron_name = automation_id[4:]
         crons_data = _load_yaml(CRONS_YAML)
         job = crons_data.get("jobs", {}).get(cron_name)
@@ -293,27 +177,18 @@ async def run_automation(automation_id: str, request: Request) -> JSONResponse:
         except Exception as e:
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
-    # Check if this is an n8n-powered automation
+    # n8n-powered automation
     n8n_client = getattr(request.app.state, "n8n_client", None)
-    if n8n_client and not automation_id.startswith("ua_"):
-        try:
-            auto = _get_n8n_automation(automation_id)
-            if auto and auto.get("n8n_workflow_id"):
-                # n8n doesn't have a direct "run" API for scheduled workflows,
-                # but we can use the execute endpoint for manual triggers
-                return JSONResponse({
-                    "status": "queued",
-                    "message": "n8n workflow triggered",
-                    "n8n_workflow_id": auto["n8n_workflow_id"],
-                })
-        except Exception:
-            pass
+    if n8n_client:
+        auto = _get_n8n_automation(automation_id)
+        if auto and auto.get("n8n_workflow_id"):
+            return JSONResponse({
+                "status": "queued",
+                "message": "n8n workflow triggered",
+                "n8n_workflow_id": auto["n8n_workflow_id"],
+            })
 
-    # User automation — would spawn an agent session
-    return JSONResponse({
-        "status": "queued",
-        "message": "User automation execution coming soon — will spawn an agent session",
-    })
+    return JSONResponse({"error": "not found"}, status_code=404)
 
 
 # ---------------------------------------------------------------------------
@@ -396,6 +271,65 @@ async def list_n8n_automations(request: Request) -> JSONResponse:
     except Exception as e:
         logger.exception("Failed to list n8n automations")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/context")
+async def automations_context(request: Request) -> JSONResponse:
+    """Return user context for the workflow generator.
+
+    Reads operator config + discovered accounts so GenerateFlow
+    doesn't need hardcoded values.
+    """
+    import yaml as _yaml
+
+    operator_path = AOS_DATA / "config" / "operator.yaml"
+    operator = {}
+    try:
+        if operator_path.exists():
+            operator = _yaml.safe_load(operator_path.read_text()) or {}
+    except Exception:
+        pass
+
+    # Telegram chat_id from Keychain
+    telegram_chat_id = None
+    try:
+        import subprocess
+        agent_secret = AOS_HOME / "core" / "bin" / "cli" / "agent-secret"
+        result = subprocess.run(
+            [str(agent_secret), "get", "TELEGRAM_CHAT_ID"],
+            capture_output=True, text=True, timeout=5,
+        )
+        val = result.stdout.strip()
+        if val and not val.startswith("Error"):
+            telegram_chat_id = val
+    except Exception:
+        pass
+
+    # Discover connected accounts from credential files
+    connected_accounts: list[str] = []
+    google_creds_dir = Path.home() / ".google_workspace_mcp" / "credentials"
+    if google_creds_dir.is_dir() and any(google_creds_dir.glob("*.json")):
+        connected_accounts.append("google_workspace")
+
+    # Check Telegram bot token
+    try:
+        import subprocess
+        agent_secret = AOS_HOME / "core" / "bin" / "cli" / "agent-secret"
+        result = subprocess.run(
+            [str(agent_secret), "get", "TELEGRAM_BOT_TOKEN"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.stdout.strip() and not result.stdout.strip().startswith("Error"):
+            connected_accounts.append("telegram")
+    except Exception:
+        pass
+
+    return JSONResponse({
+        "telegram_chat_id": telegram_chat_id,
+        "connected_accounts": connected_accounts,
+        "operator_name": operator.get("name"),
+        "timezone": operator.get("timezone"),
+    })
 
 
 @router.get("/health")
