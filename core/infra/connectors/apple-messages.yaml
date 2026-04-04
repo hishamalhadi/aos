@@ -1,0 +1,48 @@
+id: apple-messages
+name: Messages
+icon: message-circle
+color: "#34C759"
+type: native
+tier: 1
+category: communication
+description: Send iMessages, read recent conversations, and monitor incoming messages.
+
+capabilities:
+  - id: send_imessage
+    label: Send iMessage
+    description: Send an iMessage to a contact by phone number or email
+  - id: read_messages
+    label: Read Recent Messages
+    description: Read recent messages from a conversation or across all chats
+  - id: conversation_monitoring
+    label: Conversation Monitoring
+    description: Watch for new incoming messages and flag important ones
+
+auth:
+  method: system_permission
+  permissions:
+    - name: Messages access
+      description: Allow AOS to send and read iMessages
+      check: AppleScript execution succeeds
+
+health:
+  checks:
+    - name: app_exists
+      type: app_exists
+      path: /System/Applications/Messages.app
+    - name: applescript_access
+      type: command
+      command: "osascript -e 'tell application \"Messages\" to get name of services' 2>/dev/null"
+      description: Can read message services via AppleScript
+
+automation_ideas:
+  - id: forward_important
+    name: Forward Important iMessages
+    description: Forward iMessages matching keywords or from VIP contacts to Telegram
+    required_also: [telegram]
+    recipe_hint: messages_forward_telegram
+  - id: auto_respond_busy
+    name: Auto-Respond When Busy
+    description: Send an auto-reply when calendar shows you're in a meeting
+    required_also: [apple-calendar]
+    recipe_hint: messages_auto_respond

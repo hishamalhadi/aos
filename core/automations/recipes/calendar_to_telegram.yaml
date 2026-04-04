@@ -1,0 +1,125 @@
+id: calendar_to_telegram
+name: Daily Calendar Summary
+description: Reads today's Google Calendar events and sends a schedule summary to Telegram
+category: productivity
+tags: [calendar, google-calendar, telegram, schedule, daily, morning]
+tested_n8n_version: "2.x"
+required_credentials:
+  - google_workspace
+  - telegram
+
+variables:
+  - name: schedule_cron
+    description: When to send the summary (cron expression)
+    type: cron
+    default: "0 7 * * *"
+    required: true
+    examples: ["0 7 * * *", "0 6 * * 1-5", "0 8 * * *"]
+  - name: calendar_id
+    description: Google Calendar ID (email address or 'primary')
+    type: string
+    default: "primary"
+    examples: ["primary", "user@gmail.com"]
+  - name: telegram_chat_id
+    description: Telegram chat ID to send the summary to
+    type: string
+    required: true
+  - name: workflow_name
+    description: Human-readable name
+    type: string
+    default: "Calendar Summary"
+
+template:
+  name: "{{workflow_name}}"
+  nodes:
+    - id: "trigger-1"
+      name: "Schedule"
+      type: "n8n-nodes-base.scheduleTrigger"
+      typeVersion: 1.2
+      position: [250, 300]
+      parameters:
+        rule:
+          interval:
+            - field: "cronExpression"
+              expression: "{{schedule_cron}}"
+    - id: "calendar-1"
+      name: "Get Events"
+      type: "n8n-nodes-base.googleCalendar"
+      typeVersion: 3
+      position: [450, 300]
+      parameters:
+        operation: "getAll"
+        calendarId:
+          __rl: true
+          mode: "id"
+          value: "{{calendar_id}}"
+        returnAll: false
+        limit: 20
+        options:
+          timeMin: "={{ $now.startOf('day').toISO() }}"
+          timeMax: "={{ $now.endOf('day').toISO() }}"
+          singleEvents: true
+          orderBy: "startTime"
+      credentials:
+        googleCalendarOAuth2Api:
+          id: null
+          name: "Google Calendar"
+    - id: "code-1"
+      name: "Format Schedule"
+      type: "n8n-nodes-base.code"
+      typeVersion: 2
+      position: [650, 300]
+      parameters:
+        jsCode: |
+          const items = $input.all();
+          if (items.length === 0) {
+            return [{ json: { text: "📅 No events today — clear schedule!" } }];
+          }
+          const lines = items.map(item => {
+            const ev = item.json;
+            const summary = ev.summary || '(no title)';
+            const start = ev.start?.dateTime
+              ? new Date(ev.start.dateTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+              : 'All day';
+            const end = ev.end?.dateTime
+              ? new Date(ev.end.dateTime).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+              : '';
+            const time = end ? `${start} – ${end}` : start;
+            const location = ev.location ? `\n   📍 ${ev.location}` : '';
+            return `• *${summary}*\n   🕐 ${time}${location}`;
+          });
+          const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+          const text = `📅 *${today}* — ${items.length} event${items.length !== 1 ? 's' : ''}\n\n${lines.join('\n\n')}`;
+          return [{ json: { text } }];
+    - id: "telegram-1"
+      name: "Send Schedule"
+      type: "n8n-nodes-base.telegram"
+      typeVersion: 1.2
+      position: [850, 300]
+      parameters:
+        chatId: "{{telegram_chat_id}}"
+        text: "={{ $json.text }}"
+        additionalFields:
+          parse_mode: "Markdown"
+      credentials:
+        telegramApi:
+          id: null
+          name: "Telegram Bot"
+  connections:
+    Schedule:
+      main:
+        - - node: "Get Events"
+            type: "main"
+            index: 0
+    Get Events:
+      main:
+        - - node: "Format Schedule"
+            type: "main"
+            index: 0
+    Format Schedule:
+      main:
+        - - node: "Send Schedule"
+            type: "main"
+            index: 0
+  settings:
+    executionOrder: "v1"

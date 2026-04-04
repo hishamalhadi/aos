@@ -1,0 +1,135 @@
+id: shopify_orders
+name: Shopify Order Notifications
+description: Monitors Shopify for new orders and sends a notification to Telegram with order details
+category: ecommerce
+tags: [shopify, orders, telegram, notification, ecommerce]
+tested_n8n_version: "2.x"
+required_credentials:
+  - telegram
+
+variables:
+  - name: schedule_cron
+    description: How often to check for new orders (cron expression)
+    type: cron
+    default: "*/30 * * * *"
+    required: true
+    examples: ["*/30 * * * *", "0 * * * *", "0 8 * * *"]
+  - name: shopify_store
+    description: Shopify store domain (e.g., 'my-store.myshopify.com')
+    type: string
+    required: true
+    examples: ["my-store.myshopify.com"]
+  - name: shopify_api_key
+    description: Shopify Admin API access token
+    type: string
+    required: true
+  - name: telegram_chat_id
+    description: Telegram chat ID to send notifications to
+    type: string
+    required: true
+  - name: workflow_name
+    description: Human-readable name
+    type: string
+    default: "Shopify Orders"
+
+template:
+  name: "{{workflow_name}}"
+  nodes:
+    - id: "trigger-1"
+      name: "Schedule"
+      type: "n8n-nodes-base.scheduleTrigger"
+      typeVersion: 1.2
+      position: [250, 300]
+      parameters:
+        rule:
+          interval:
+            - field: "cronExpression"
+              expression: "{{schedule_cron}}"
+    - id: "http-1"
+      name: "Get Orders"
+      type: "n8n-nodes-base.httpRequest"
+      typeVersion: 4.2
+      position: [450, 300]
+      parameters:
+        method: "GET"
+        url: "=https://{{shopify_store}}/admin/api/2024-01/orders.json?status=any&limit=5&created_at_min={{ $now.minus({hours: 1}).toISO() }}"
+        authentication: "predefinedCredentialType"
+        headerParameters:
+          parameters:
+            - name: "X-Shopify-Access-Token"
+              value: "{{shopify_api_key}}"
+        options: {}
+    - id: "code-1"
+      name: "Format Orders"
+      type: "n8n-nodes-base.code"
+      typeVersion: 2
+      position: [650, 300]
+      parameters:
+        jsCode: |
+          const data = $input.first().json;
+          const orders = data.orders || [];
+          if (orders.length === 0) {
+            return [{ json: { text: '', empty: true } }];
+          }
+          const lines = orders.map(o => {
+            const total = o.total_price ? `$${o.total_price}` : 'N/A';
+            const name = o.billing_address?.name || o.customer?.first_name || 'Guest';
+            const items = (o.line_items || []).map(li => `${li.quantity}x ${li.title}`).join(', ');
+            return `🛒 *Order #${o.order_number}*\n   👤 ${name} · 💰 ${total}\n   ${items}`;
+          });
+          const text = `🛍️ *${orders.length} new order${orders.length !== 1 ? 's' : ''}*\n\n${lines.join('\n\n')}`;
+          return [{ json: { text, count: orders.length } }];
+    - id: "if-1"
+      name: "Has Orders?"
+      type: "n8n-nodes-base.if"
+      typeVersion: 2
+      position: [850, 300]
+      parameters:
+        conditions:
+          options:
+            caseSensitive: true
+            leftValue: ""
+            typeValidation: "strict"
+          conditions:
+            - leftValue: "={{ $json.empty }}"
+              rightValue: true
+              operator:
+                type: "boolean"
+                operation: "notEquals"
+    - id: "telegram-1"
+      name: "Send Notification"
+      type: "n8n-nodes-base.telegram"
+      typeVersion: 1.2
+      position: [1050, 250]
+      parameters:
+        chatId: "{{telegram_chat_id}}"
+        text: "={{ $json.text }}"
+        additionalFields:
+          parse_mode: "Markdown"
+      credentials:
+        telegramApi:
+          id: null
+          name: "Telegram Bot"
+  connections:
+    Schedule:
+      main:
+        - - node: "Get Orders"
+            type: "main"
+            index: 0
+    Get Orders:
+      main:
+        - - node: "Format Orders"
+            type: "main"
+            index: 0
+    Format Orders:
+      main:
+        - - node: "Has Orders?"
+            type: "main"
+            index: 0
+    Has Orders?:
+      main:
+        - - node: "Send Notification"
+            type: "main"
+            index: 0
+  settings:
+    executionOrder: "v1"

@@ -1,0 +1,48 @@
+id: apple-contacts
+name: Contacts
+icon: users
+color: "#8E8E93"
+type: native
+tier: 1
+category: data
+description: Look up contacts, resolve phone numbers and emails, and track birthdays.
+
+capabilities:
+  - id: contact_lookup
+    label: Contact Lookup
+    description: Search contacts by name, phone number, or email address
+  - id: phone_email_resolution
+    label: Phone/Email Resolution
+    description: Resolve a name to phone number or email, and vice versa
+  - id: birthday_tracking
+    label: Birthday Tracking
+    description: List upcoming birthdays from contact records
+
+auth:
+  method: system_permission
+  permissions:
+    - name: Contacts access
+      description: Allow AOS to read contact information
+      check: AppleScript execution succeeds
+
+health:
+  checks:
+    - name: app_exists
+      type: app_exists
+      path: /System/Applications/Contacts.app
+    - name: applescript_access
+      type: command
+      command: "osascript -e 'tell application \"Contacts\" to get name of people' 2>/dev/null"
+      description: Can read contact names via AppleScript
+
+automation_ideas:
+  - id: birthday_reminders
+    name: Birthday Reminders
+    description: Send birthday reminders to Telegram the morning of each contact's birthday
+    required_also: [telegram]
+    recipe_hint: contacts_birthday_telegram
+  - id: contact_lookup_incoming
+    name: Contact Lookup for Incoming Messages
+    description: Resolve unknown numbers or emails against contacts when messages arrive
+    required_also: [telegram]
+    recipe_hint: contacts_resolve_sender

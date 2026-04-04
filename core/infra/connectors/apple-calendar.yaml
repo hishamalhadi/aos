@@ -1,0 +1,56 @@
+id: apple-calendar
+name: Calendar
+icon: calendar
+color: "#FF3B30"
+type: native
+tier: 1
+category: productivity
+description: Read and create calendar events. Schedule awareness and conflict detection.
+
+capabilities:
+  - id: read_events
+    label: Read Events
+    description: List today's events, upcoming schedule, event details
+  - id: create_events
+    label: Create Events
+    description: Create new calendar events with title, time, location
+  - id: schedule_awareness
+    label: Schedule Awareness
+    description: Know what's happening now, next, and today at a glance
+  - id: conflict_detection
+    label: Conflict Detection
+    description: Detect overlapping or back-to-back events before scheduling
+
+auth:
+  method: system_permission
+  permissions:
+    - name: Calendar access
+      description: Allow AOS to read and write calendar events
+      check: AppleScript execution succeeds
+
+health:
+  checks:
+    - name: app_exists
+      type: app_exists
+      path: /System/Applications/Calendar.app
+    - name: applescript_access
+      type: command
+      command: "osascript -e 'tell application \"Calendar\" to get name of calendars' 2>/dev/null"
+      description: Can read calendar names via AppleScript
+
+automation_ideas:
+  - id: morning_schedule
+    name: Morning Schedule Brief
+    description: Send today's calendar events to Telegram every morning
+    required_also: [telegram]
+    recipe_hint: calendar_to_telegram
+  - id: meeting_reminder
+    name: Meeting Reminder
+    description: Send a reminder to Telegram 15 minutes before each meeting
+    required_also: [telegram]
+    recipe_hint: calendar_reminder
+  - id: weekly_summary
+    name: Weekly Calendar Summary
+    description: Compile and send a summary of the upcoming week's events
+    required_also: [telegram]
+    recipe_hint: calendar_weekly_summary

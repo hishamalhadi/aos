@@ -1,0 +1,67 @@
+id: telegram
+name: Telegram
+icon: send
+color: "#0088CC"
+type: service
+tier: 2
+category: communication
+description: Primary notification channel. Send and receive messages via bot. Slash commands, alerts, file sharing.
+
+capabilities:
+  - id: send_message
+    label: Send Message
+    description: Send text, photos, files to any chat via bot
+  - id: receive_commands
+    label: Receive Commands
+    description: Respond to slash commands from the operator
+  - id: notifications
+    label: Notifications
+    description: Push alerts, reminders, and status updates
+  - id: file_sharing
+    label: File Sharing
+    description: Send and receive files, documents, images
+
+auth:
+  method: api_key
+  credentials:
+    - key: TELEGRAM_BOT_TOKEN
+      label: Bot Token
+      required: true
+    - key: TELEGRAM_CHAT_ID
+      label: Chat ID
+      required: true
+
+health:
+  checks:
+    - name: credentials
+      type: keychain
+      keys: [TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID]
+      description: Bot token and chat ID exist in Keychain
+    - name: service_running
+      type: launchagent
+      label: com.aos.bridge
+      description: Telegram bridge service is loaded
+    - name: api_reachable
+      type: command
+      command: "curl -sf https://api.telegram.org/bot$(~/aos/core/bin/cli/agent-secret get TELEGRAM_BOT_TOKEN)/getMe >/dev/null 2>&1"
+      description: Bot token is valid and Telegram API is reachable
+
+n8n:
+  credential_types:
+    - telegramApi
+  node_types:
+    - n8n-nodes-base.telegram
+    - n8n-nodes-base.telegramTrigger
+
+automation_ideas:
+  - id: scheduled_reminder
+    name: Scheduled Reminders
+    description: Send yourself reminders on a schedule
+    recipe_hint: schedule_to_telegram
+  - id: system_alerts
+    name: System Health Alerts
+    description: Get notified when AOS services go down
+  - id: daily_briefing
+    name: Daily Briefing
+    description: Morning summary of calendar, email, tasks, weather
+    required_also: [google-workspace]

@@ -1,0 +1,51 @@
+id: apple-reminders
+name: Reminders
+icon: check-square
+color: "#007AFF"
+type: native
+tier: 1
+category: productivity
+description: Create reminders, manage lists, set due dates, and track completions.
+
+capabilities:
+  - id: create_reminders
+    label: Create Reminders
+    description: Create new reminders with title, due date, and optional notes
+  - id: list_management
+    label: List Management
+    description: Create, list, and organize reminder lists
+  - id: due_dates
+    label: Due Dates
+    description: Set and query reminders by due date or time
+  - id: completion_tracking
+    label: Completion Tracking
+    description: Mark reminders complete and track completion history
+
+auth:
+  method: system_permission
+  permissions:
+    - name: Reminders access
+      description: Allow AOS to read and write reminders
+      check: AppleScript execution succeeds
+
+health:
+  checks:
+    - name: app_exists
+      type: app_exists
+      path: /System/Applications/Reminders.app
+    - name: applescript_access
+      type: command
+      command: "osascript -e 'tell application \"Reminders\" to get name of lists' 2>/dev/null"
+      description: Can read reminder lists via AppleScript
+
+automation_ideas:
+  - id: telegram_to_reminder
+    name: Create Reminder from Telegram
+    description: Turn a Telegram message into an Apple Reminder with a due date
+    required_also: [telegram]
+    recipe_hint: telegram_to_reminders
+  - id: daily_task_review
+    name: Daily Task Review
+    description: Send today's due reminders to Telegram each morning
+    required_also: [telegram]
+    recipe_hint: reminders_daily_review
