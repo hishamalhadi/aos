@@ -519,9 +519,15 @@ function RecentSessions() {
           const all = Array.isArray(data) ? data : []
           // Filter to sessions with real titles and content
           const meaningful = all.filter((s: SessionRecord) =>
-            s.title && s.title !== 'Untitled Meeting' && s.duration_seconds > 10
+            s.title
+            && !s.title.startsWith('Untitled')
+            && s.duration_seconds > 10
           )
-          setSessions(meaningful.slice(0, 5))
+          // Fall back to any session with content if no titled ones
+          const candidates = meaningful.length > 0
+            ? meaningful
+            : all.filter((s: SessionRecord) => s.duration_seconds > 10)
+          setSessions(candidates.slice(0, 5))
           setLoaded(true)
         }
       })
