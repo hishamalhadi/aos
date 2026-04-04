@@ -733,14 +733,15 @@ export function useCompanion() {
   ])
 
   // -------------------------------------------------------------------------
-  // Session lifecycle — resume or start a session on mount
+  // Session lifecycle — check for existing active session on mount
   // -------------------------------------------------------------------------
   const sessionInitialized = useRef(false)
   useEffect(() => {
     if (sessionInitialized.current) return
     sessionInitialized.current = true
 
-    // Always check backend for an active session first
+    // Check backend for an active session — don't auto-create one.
+    // Sessions are created explicitly by the user via SessionSetup.
     fetch('/companion/session')
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
@@ -749,14 +750,7 @@ export function useCompanion() {
           // Full state restore (transcript, notes, cards) handled by the
           // separate sessionRestored effect below.
           setSessionId(data.id)
-          return
         }
-        // No active session — start a fresh one
-        return fetch('/companion/session/start', { method: 'POST' })
-          .then((r) => r.json())
-          .then((session) => {
-            if (session?.id) setSessionId(session.id)
-          })
       })
       .catch(() => {})
   }, [setSessionId])
@@ -777,6 +771,11 @@ export function useCompanion() {
         const data = await res.json()
 
         if (cancelled || !data || data.status !== 'active') return
+
+        // Only restore sessions that have actual content — skip empty orphans
+        const hasContent = (data.utterance_count || 0) > 0
+          || (Array.isArray(data.transcript_json) && data.transcript_json.length > 0)
+        if (!hasContent) return
 
         // Only restore if store has no session (e.g. after page refresh cleared sessionStorage)
         const storeState = useCompanionStore.getState()
