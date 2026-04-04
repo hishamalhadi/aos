@@ -247,9 +247,112 @@ def _list_metadata_sessions(limit: int = 50) -> list[dict]:
     return results
 
 
+def _get_companion_session(session_id: str) -> dict | None:
+    """Fetch a session from sessions_v2 (companion sessions) and adapt to meeting format."""
+    try:
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions_v2 WHERE id = ?", (session_id,)
+            ).fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        transcript = json.loads(d.get("transcript_json") or "[]")
+        notes_raw = json.loads(d.get("notes_json") or "[]")
+        summary_raw = json.loads(d.get("summary_json") or "{}")
+        cards = json.loads(d.get("cards_json") or "[]")
+
+        # Convert notes list-of-groups → dict for SessionDetail compatibility
+        notes_dict: dict[str, list[str]] = {}
+        if isinstance(notes_raw, list):
+            for g in notes_raw:
+                if isinstance(g, dict):
+                    topic = g.get("topic", "Notes")
+                    items = g.get("items", [])
+                    notes_dict[topic] = items
+        elif isinstance(notes_raw, dict):
+            notes_dict = notes_raw
+
+        # Build summary text from executive_summary + structured data
+        summary_parts = []
+        if summary_raw.get("executive_summary"):
+            summary_parts.append(summary_raw["executive_summary"])
+        for section in ("key_points", "tasks", "decisions", "ideas"):
+            items = summary_raw.get(section, [])
+            if items:
+                summary_parts.append(f"\n**{section.replace('_', ' ').title()}:**")
+                for item in items:
+                    summary_parts.append(f"- {item}")
+        summary_text = "\n".join(summary_parts)
+
+        # Duration
+        started = d.get("started_at", "")
+        ended = d.get("ended_at", "")
+        duration = 0
+        if started and ended:
+            try:
+                duration = int(
+                    (datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds()
+                )
+            except (ValueError, TypeError):
+                pass
+
+        return {
+            "id": d["id"],
+            "title": d.get("title") or "Untitled Session",
+            "date": started,
+            "duration_seconds": duration,
+            "has_transcript": len(transcript) > 0,
+            "has_summary": bool(summary_text),
+            "summary": summary_text,
+            "transcript": transcript,
+            "notes": notes_dict,
+            "participants": json.loads(d.get("participants") or "[]") if isinstance(d.get("participants"), str) else (d.get("participants") or []),
+            "audio_path": d.get("audio_path", ""),
+        }
+    except Exception as e:
+        logger.debug("Companion session lookup failed for %s: %s", session_id, e)
+        return None
+
+
+def _list_companion_sessions(limit: int = 50) -> list[dict]:
+    """List sessions from sessions_v2 in meeting-compatible format."""
+    try:
+        with _db() as conn:
+            rows = conn.execute(
+                "SELECT id, title, status, started_at, ended_at, utterance_count, summary_json "
+                "FROM sessions_v2 WHERE status = 'ended' ORDER BY started_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        results = []
+        for row in rows:
+            d = dict(row)
+            started = d.get("started_at", "")
+            ended = d.get("ended_at", "")
+            duration = 0
+            if started and ended:
+                try:
+                    duration = int(
+                        (datetime.fromisoformat(ended) - datetime.fromisoformat(started)).total_seconds()
+                    )
+                except (ValueError, TypeError):
+                    pass
+            results.append({
+                "id": d["id"],
+                "title": d.get("title") or "Untitled Session",
+                "date": started,
+                "duration_seconds": duration,
+                "has_transcript": (d.get("utterance_count") or 0) > 0,
+                "has_summary": bool(d.get("summary_json")),
+            })
+        return results
+    except Exception:
+        return []
+
+
 @router.get("/companion/meetings")
 async def list_meetings():
-    """List meetings — combines DB sessions and metadata files, deduped by ID."""
+    """List all sessions — merges old meetings (sessions table), companion sessions (sessions_v2), and metadata files."""
     try:
         db_sessions = _list_sessions()
     except Exception as e:
@@ -262,7 +365,9 @@ async def list_meetings():
         logger.error("Failed to list metadata sessions: %s", e)
         meta_sessions = []
 
-    # Merge: metadata is authoritative, DB fills gaps
+    companion_sessions = _list_companion_sessions()
+
+    # Merge: metadata first, then DB, then companion — deduped by ID
     seen_ids: set[str] = set()
     merged: list[dict] = []
     for s in meta_sessions:
@@ -270,6 +375,11 @@ async def list_meetings():
         merged.append(s)
     for s in db_sessions:
         if s["id"] not in seen_ids:
+            seen_ids.add(s["id"])
+            merged.append(s)
+    for s in companion_sessions:
+        if s["id"] not in seen_ids:
+            seen_ids.add(s["id"])
             merged.append(s)
 
     # Sort by date descending
@@ -280,7 +390,12 @@ async def list_meetings():
 async def get_meeting(mid: str):
     if _meeting.id == mid and _meeting.status not in ("ended", "idle"):
         return JSONResponse(_meeting.to_dict())
+    # Check old sessions table first
     data = _get_session(mid)
+    if data:
+        return JSONResponse(data)
+    # Fallback to sessions_v2 (companion sessions)
+    data = _get_companion_session(mid)
     if data:
         return JSONResponse(data)
 
