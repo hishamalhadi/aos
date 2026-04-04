@@ -74,7 +74,7 @@ case "${1:-help}" in
         # Sync ALL skills from framework to user space via symlinks.
         # Auto-discovers skills — no hardcoded lists to maintain.
         # Deprecated skills are explicitly excluded; everything else is installed.
-        SOURCE="$AOS_DIR/.claude/skills"
+        SOURCE="$AOS_DIR/core/skills"
         TARGET="$HOME/.claude/skills"
         mkdir -p "$TARGET"
 

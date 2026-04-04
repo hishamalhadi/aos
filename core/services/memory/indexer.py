@@ -22,7 +22,7 @@ WATCH_GLOBS = [
     "docs/*.md",
     ".claude/agents/*.md",
     ".claude/commands/*.md",
-    ".claude/skills/*/SKILL.md",
+    "core/skills/*/SKILL.md",
     "CLAUDE.md",
     "justfile",
 ]

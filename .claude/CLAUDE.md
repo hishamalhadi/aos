@@ -11,7 +11,7 @@ AOS is a configured Claude Code harness. Claude Code is the runtime.
 ~/.claude/CLAUDE.md   = Global kernel (loaded every session, everywhere)
 ~/aos/CLAUDE.md     = System details (loaded when working on AOS)
 .claude/agents/       = Agent definitions (dispatched via Agent tool)
-.claude/skills/       = Knowledge modules (loaded on demand)
+core/skills/          = Skill source (synced to ~/.claude/skills/ on install)
 .claude/rules/        = Conditional policies (loaded by path/context)
 .claude/hooks/        = Deterministic handlers (no LLM, no tokens)
 ```
@@ -29,11 +29,13 @@ Install mechanism:
 
 ## Skills
 
-Skill source: `~/aos/.claude/skills/` (development).
-Active skills: `~/.claude/skills/` (installed globally, available in every session).
+Skill source: `~/aos/core/skills/` (shipped with framework).
+Active skills: `~/.claude/skills/` (symlinked globally, available in every session).
 
-Installed globally (not project-scoped) because agents are global — Chief needs
-skills regardless of which directory the session is in.
+Skills live in `core/skills/` (not `.claude/skills/`) to avoid Claude Code
+loading them as project-scoped skills when working in the dev workspace.
+Installed globally because agents are global — Chief needs skills regardless
+of which directory the session is in.
 
 | Skill | Trigger | What |
 |-------|---------|------|

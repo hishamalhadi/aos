@@ -15,24 +15,29 @@ The interface feels like a space you inhabit, not a tool you operate.
 - Minimal elevation. Borders over shadows.
 - No permanent chrome. Content gets the screen. Chrome floats and overlays.
 
-## Two Fonts
+## Fonts
 
 | Font | Use | Why |
 |------|-----|-----|
-| **EB Garamond** (serif) | Body text, content, paragraphs, transcripts, notes, briefings | The qareen's voice. Warmth, personality, readability. |
-| **Inter** (sans-serif) | UI chrome: nav, buttons, labels, inputs, badges, context bar, timestamps | Interface elements. Clean, functional, stays out of the way. |
+| **Inter** (sans-serif) | Everything. Default for all UI, labels, body text, nav, controls. | Clean, functional, consistent. The base layer. |
+| **EB Garamond** (serif) | Opt-in for reading surfaces: briefings, knowledge content, chat prose, vault notes. | Warmth and personality where the qareen speaks in paragraphs. |
+| **Berkeley Mono** (mono) | Code, timestamps, counts. | |
 
 ```css
---font-serif: "EB Garamond Variable", Georgia, serif;
 --font-sans:  "Inter Variable", "SF Pro Text", -apple-system, sans-serif;
+--font-serif: "EB Garamond Variable", Georgia, serif;
 --font-mono:  "Berkeley Mono", "SF Mono", ui-monospace, monospace;
 ```
 
-Body defaults to serif. UI elements (nav, button, input, label, kbd, code, overlines, captions) override to sans.
+Body defaults to sans. Apply `font-serif` explicitly where you want Garamond — never assume it's inherited.
 
-## Color Tokens — Warm Dark
+## Color Tokens
 
-The palette is warm dark brown. Never cold. Never blue-tinted.
+Two themes: warm dark (default) and warm light. Both share the same token names — values swap via `[data-theme]` in CSS. Never cold. Never blue-tinted.
+
+### Dark Theme (default)
+
+The palette is warm dark brown.
 
 ### Backgrounds
 
@@ -69,11 +74,49 @@ Borders are cream-tinted, not white. `rgba(255, 245, 235, ...)` not `rgba(255, 2
 |-------|-------|-------|
 | `accent` | `#D9730D` | Brand orange, active indicators |
 | `accent-hover` | `#E8842A` | Hover state |
+| `accent-muted` | `#1F1510` | Dark tinted bg behind accent elements |
+| `accent-subtle` | `rgba(217,115,13,0.15)` | Faint accent wash |
 | `green` | `#30D158` | Success, connected |
 | `red` | `#FF453A` | Error, destructive |
 | `yellow` | `#FFD60A` | Warning, pending |
 | `blue` | `#0A84FF` | Info, links |
 | `purple` | `#BF5AF2` | Special, agent |
+| `teal` | `#64D2FF` | Highlights, secondary info |
+| `orange` | `#FF9F0A` | Attention, medium priority |
+
+### Muted Variants
+
+Every status color has a `-muted` companion — a dark-tinted background for badges, tags, and status chips. Provides subtle context without visual noise.
+
+| Token | Value | Used behind |
+|-------|-------|-------------|
+| `green-muted` | `#0D1F12` | Success badges |
+| `red-muted` | `#1F0F0E` | Error indicators |
+| `yellow-muted` | `#1C1A08` | Warning chips |
+| `orange-muted` | `#1C1508` | Attention badges |
+| `blue-muted` | `#0A1520` | Info backgrounds |
+| `purple-muted` | `#1A1020` | Agent/special |
+| `teal-muted` | `#0A1A20` | Highlight backgrounds |
+
+In light mode, muted variants flip to light washes (e.g. `green-muted` → `#E8F5EE`).
+
+### Tag Colors
+
+9 color families for labels, categories, and pipeline stages. Each has a paired text + background token.
+
+| Family | Text | Background |
+|--------|------|------------|
+| `tag-gray` | `#8E8E93` | `#2C2C2E` |
+| `tag-green` | `#30D158` | `#12261A` |
+| `tag-blue` | `#0A84FF` | `#0F1A2E` |
+| `tag-purple` | `#BF5AF2` | `#1E1228` |
+| `tag-red` | `#FF453A` | `#2E1210` |
+| `tag-yellow` | `#FFD60A` | `#262010` |
+| `tag-orange` | `#FF9F0A` | `#261A0A` |
+| `tag-teal` | `#64D2FF` | `#102228` |
+| `tag-pink` | `#FF375F` | `#28101A` |
+
+Usage: `<span className="text-tag-blue bg-tag-blue-bg">label</span>`. Both values swap in light mode.
 
 ### Interaction
 
@@ -83,20 +126,44 @@ Borders are cream-tinted, not white. `rgba(255, 245, 235, ...)` not `rgba(255, 2
 | `active` | `rgba(255, 245, 235, 0.08)` | Active/pressed |
 | `selected` | `rgba(255, 245, 235, 0.12)` | Selected items |
 
+### Light Theme
+
+Warm paper tones. Set via `data-theme="light"` on `<html>`. Stored in `localStorage` key `qareen-theme`.
+
+| Token | Dark | Light |
+|-------|------|-------|
+| `bg` | `#0D0B09` | `#F7F4F0` |
+| `bg-panel` | `#151210` | `#EFEBE4` |
+| `bg-secondary` | `#1E1A16` | `#EAE5DD` |
+| `bg-tertiary` | `#2A2520` | `#E3DDD5` |
+| `text` | `#FFFFFF` | `#38322B` |
+| `text-secondary` | `#E8E4DF` | `#5C554C` |
+| `text-tertiary` | `#9A9490` | `#8A827A` |
+| `accent` | `#D9730D` | `#C4660A` |
+| `border` | `rgba(255,245,235,0.06)` | `rgba(56,50,43,0.07)` |
+
+Light borders are brown-tinted, not gray. `rgba(56, 50, 43, ...)` — same warmth principle, inverted.
+
+Status colors are darkened for paper readability (e.g. green `#30D158` → `#2D8A50`). Muted variants flip to light washes (e.g. `green-muted` `#0D1F12` → `#E8F5EE`).
+
+**Rule:** Components reference token names, never raw hex. The theme swap handles everything. Glass, shadows, and interactions all have light variants in CSS.
+
 ## Glass Pill Pattern
 
-Floating UI chrome uses translucent glass pills.
+Floating UI chrome uses translucent glass pills. Theme-aware via CSS variables.
 
 ```css
-background: rgba(30, 26, 22, 0.60);   /* bg-secondary at 60% */
+background: var(--glass-bg);           /* dark: rgba(30,26,22,0.60)  light: rgba(247,244,240,0.70) */
 backdrop-filter: blur(12px);
-border: 1px solid rgba(255, 245, 235, 0.06);
+border: 1px solid var(--glass-border); /* dark: warm cream alpha      light: warm brown alpha */
 border-radius: 9999px;
-box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+box-shadow: var(--glass-shadow);
 height: 32px;
 ```
 
-Used for: navigation toggle, context bar. Never for content containers.
+**Never hardcode glass values inline.** Use `--glass-bg`, `--glass-border`, `--glass-shadow`. They swap with the theme.
+
+Used for: navigation toggle, context bar, tab pills. Never for content containers.
 
 ## Navigation
 
@@ -110,25 +177,34 @@ No permanent sidebar or topbar. Navigation is a floating overlay.
 
 Content always gets 100% screen width.
 
-## Aurora Background
+## Orb
 
-The companion idle screen has a living atmospheric background.
+The companion idle screen has a living presence: a WebGL orb (Three.js via react-three-fiber). GLSL shaders render orbital rings with Perlin noise, voice-reactive animation, and prayer-period color shifting. The orb is blurred (40-60px) as a full-screen background behind the companion UI.
 
-**Technique:** Canvas-drawn sine-wave ribbons. CSS `filter: blur(45px)`. Animation via `requestAnimationFrame` (not CSS keyframes — unreliable on Safari over Tailscale).
+**The orb lives on the companion screen only.** It is the qareen's visual heartbeat.
+
+### Prayer-Period Ambient Tinting
+
+The rest of the app absorbs the orb's color influence without rendering WebGL. A subtle radial gradient overlay on every page shifts with the current Islamic time period. A film grain texture (SVG `feTurbulence`) adds analog warmth.
+
+**Implementation:** `usePrayerAmbient` hook → Layout renders two layers:
+1. Radial gradient (two ellipses, 50% opacity, 60s CSS transition)
+2. Grain overlay (SVG noise filter, 3% opacity, `mix-blend-mode: overlay`)
 
 **Colors shift by Islamic prayer period:**
 
-| Period | Palette | Vibe |
-|--------|---------|------|
-| Fajr / Last Third | Deep blue-violet | Pre-dawn |
-| Sunrise | Warm amber + rose | Dawn |
-| Duha | Warm amber | Morning energy |
-| Dhuhr | Golden | Midday |
-| Asr | Mellow amber-orange | Afternoon |
-| Maghrib | Deep orange-red | Sunset |
-| Isha | Deep indigo-violet | Night |
+| Period | Vibe | Orb Colors | Ambient Tint |
+|--------|------|------------|--------------|
+| Last Third | Pre-dawn | `#2A1F4E` / `#4A3570` | Deep indigo |
+| Fajr | Dawn prayer | `#5C3D7A` / `#8B5A6B` | Violet haze |
+| Sunrise | Morning light | `#C4692A` / `#E8943D` | Warm amber glow |
+| Duha | Morning energy | `#D9730D` / `#E8943D` | Golden warmth |
+| Dhuhr | Midday | `#D4920F` / `#E8B84D` | Bright gold |
+| Asr | Afternoon | `#C47020` / `#D9883A` | Mellow amber |
+| Maghrib | Sunset | `#9A3E1A` / `#C45530` | Sunset red-brown |
+| Isha | Night | `#3D2A1E` / `#6B4530` | Near-black warmth |
 
-Only on the companion idle screen. Active sessions use solid `bg`.
+Prayer calculation via `adhan` library (ISNA method, Shafi'i Asr). Updates every 60 seconds.
 
 ## Context Bar
 
@@ -150,7 +226,7 @@ Prayer via `adhan` library (local calculation). Weather via Open-Meteo (free, no
 | Element | Font | Size | Weight | Line Height |
 |---------|------|------|--------|-------------|
 | Greeting | Garamond | 24px | 600 | 1.3 |
-| Body / paragraphs | Garamond | 14px | 400 | 1.6 |
+| Body / paragraphs | Garamond | 13px | 400 | 1.5 |
 | Nav items | Inter | 12-13px | 450-590 | 1.3 |
 | Labels | Inter | 13px | 510 | 1.4 |
 | Buttons | Inter | 12-13px | 510 | — |
@@ -196,6 +272,9 @@ Easing: `cubic-bezier(0.25, 0.46, 0.45, 0.94)` for most transitions.
 6. **Cursor pointer.** Every clickable element.
 7. **Animate open AND close.** No instant unmount.
 8. **No permanent chrome.** Chrome floats and overlays.
-9. **Prayer-period awareness.** Aurora, context bar, greeting reflect the current Islamic time period.
+9. **Prayer-period awareness.** Orb, ambient tint, context bar, greeting reflect the current Islamic time period.
 10. **No hardcoded colors.** Always reference design tokens.
-11. **Serif for content, sans for chrome.** EB Garamond speaks. Inter controls.
+11. **Inter everywhere, serif opt-in.** Default is sans. Apply `font-serif` only on reading surfaces.
+12. **No redundant page titles.** The nav pill shows the page name. Don't repeat it as an h1. Start with content.
+13. **Page backgrounds are transparent.** Layout owns the bg + ambient tint. Pages don't set `bg-bg` on their root div.
+14. **Use glass variables.** Never hardcode glass rgba — use `--glass-bg`, `--glass-border`, `--glass-shadow`.
