@@ -545,6 +545,14 @@ function RecentSessions() {
           <span className="text-[10px] font-[510] uppercase tracking-[0.06em] text-white/25">
             Recent
           </span>
+          <span className="flex-1" />
+          <button
+            onClick={() => navigate('/sessions')}
+            className="text-[10px] font-[450] text-white/20 hover:text-accent transition-colors cursor-pointer"
+            style={{ transitionDuration: 'var(--duration-instant)' }}
+          >
+            See all
+          </button>
         </div>
         <div className="space-y-px">
           {sessions.map(s => (

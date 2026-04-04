@@ -1,28 +1,29 @@
 import { lazy, Suspense } from 'react';
-import { Routes, Route } from 'react-router-dom';
+import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from '@/components/layout/Layout';
 import { Skeleton } from '@/components/primitives';
 
+// ── Primary surfaces ──
 const Companion = lazy(() => import('@/pages/Companion'));
-const Home = lazy(() => import('@/pages/Home'));
-const Tasks = lazy(() => import('@/pages/Tasks'));
+const Work = lazy(() => import('@/pages/Work'));
 const People = lazy(() => import('@/pages/People'));
 const Vault = lazy(() => import('@/pages/Vault'));
-const Agents = lazy(() => import('@/pages/Agents'));
+const Chat = lazy(() => import('@/pages/Chat'));
 const System = lazy(() => import('@/pages/System'));
-const Config = lazy(() => import('@/pages/Config'));
-const Analytics = lazy(() => import('@/pages/Analytics'));
-const Channels = lazy(() => import('@/pages/Channels'));
-const Pipelines = lazy(() => import('@/pages/Pipelines'));
-const Projects = lazy(() => import('@/pages/Projects'));
-const Calendar = lazy(() => import('@/pages/Calendar'));
-const Chief = lazy(() => import('@/pages/Chief'));
-const Meeting = lazy(() => import('@/pages/Meeting'));
-const Approvals = lazy(() => import('@/pages/Approvals'));
-const Memory = lazy(() => import('@/pages/Memory'));
+const Settings = lazy(() => import('@/pages/Settings'));
+const Days = lazy(() => import('@/pages/Days'));
+const Agents = lazy(() => import('@/pages/Agents'));
+const Automations = lazy(() => import('@/pages/Automations'));
+const Org = lazy(() => import('@/pages/Org'));
+
+// ── Sub-views ──
 const Sessions = lazy(() => import('@/pages/Sessions'));
 const SessionDetail = lazy(() => import('@/pages/SessionDetail'));
-const Settings = lazy(() => import('@/pages/Settings'));
+
+// ── Review: pages with real UI, kept for evaluation ──
+const Meeting = lazy(() => import('@/pages/Meeting'));
+const Calendar = lazy(() => import('@/pages/Calendar'));
+const Approvals = lazy(() => import('@/pages/Approvals'));
 
 function PageFallback() {
   return (
@@ -43,28 +44,34 @@ export default function App() {
     <Suspense fallback={<PageFallback />}>
       <Routes>
         <Route element={<Layout />}>
+          {/* ── Primary surfaces ── */}
           <Route path="/" element={<Companion />} />
-          <Route path="/home" element={<Home />} />
-          <Route path="/tasks" element={<Tasks />} />
+          <Route path="/work" element={<Work />} />
           <Route path="/people" element={<People />} />
-          <Route path="/docs" element={<Vault />} />
           <Route path="/vault" element={<Vault />} />
-          <Route path="/agents" element={<Agents />} />
+          <Route path="/vault/knowledge" element={<Vault />} />
+          <Route path="/vault/logs" element={<Vault />} />
+          <Route path="/docs" element={<Vault />} />
+          <Route path="/timeline" element={<Days />} />
+          <Route path="/timeline/*" element={<Days />} />
+          <Route path="/chat" element={<Chat />} />
           <Route path="/system" element={<System />} />
-          <Route path="/config" element={<Config />} />
           <Route path="/settings" element={<Settings />} />
-          <Route path="/analytics" element={<Analytics />} />
-          <Route path="/channels" element={<Channels />} />
-          <Route path="/pipelines" element={<Pipelines />} />
-          <Route path="/pipeline" element={<Pipelines />} />
-          <Route path="/projects" element={<Projects />} />
-          <Route path="/calendar" element={<Calendar />} />
-          <Route path="/chief" element={<Chief />} />
-          <Route path="/meeting" element={<Meeting />} />
-          <Route path="/approvals" element={<Approvals />} />
-          <Route path="/memory" element={<Memory />} />
+          <Route path="/agents" element={<Agents />} />
+          <Route path="/org" element={<Org />} />
+
+          {/* ── Sub-routes ── */}
           <Route path="/sessions" element={<Sessions />} />
           <Route path="/sessions/:id" element={<SessionDetail />} />
+
+          {/* ── Review: pages kept for evaluation ── */}
+          <Route path="/meeting" element={<Meeting />} />
+          <Route path="/calendar" element={<Calendar />} />
+
+          <Route path="/approvals" element={<Approvals />} />
+
+          <Route path="/automations" element={<Automations />} />
+
         </Route>
       </Routes>
     </Suspense>
