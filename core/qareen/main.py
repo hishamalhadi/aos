@@ -522,6 +522,17 @@ async def lifespan(app: FastAPI):
         from automations.client import N8nClient
         app.state.n8n_client = N8nClient()
         logger.info("n8n client initialized")
+
+        # Sync credentials (Google, Telegram) into n8n on startup
+        try:
+            from automations.credentials import sync_all
+            synced = await sync_all(app.state.n8n_client)
+            if synced:
+                logger.info("Credential sync: %s", synced)
+            else:
+                logger.info("Credential sync: all credentials already present")
+        except Exception:
+            logger.exception("Credential sync failed — automations may lack credentials")
     except Exception:
         app.state.n8n_client = None
         logger.info("n8n client not available — automations will use legacy mode")

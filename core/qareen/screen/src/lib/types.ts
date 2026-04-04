@@ -278,6 +278,8 @@ export interface WorkResponse {
 
 export interface OperatorResponse {
   name: string
+  nickname?: string
+  prompt?: string
   timezone: string
   language: string
   agent_name: string
@@ -297,6 +299,8 @@ export interface OperatorResponse {
 
 export interface UpdateOperatorRequest {
   name?: string
+  nickname?: string
+  prompt?: string
   timezone?: string
   language?: string
   agent_name?: string
@@ -461,12 +465,46 @@ export interface RelationshipSchema {
   target_name?: string
 }
 
+export interface ChannelPresence {
+  channel: string
+  identifier: string
+  last_message_at?: string
+  available: boolean
+}
+
 export interface PersonDetailResponse extends PersonResponse {
   email?: string
   phone?: string
   comms_trust_level: number
   interactions: InteractionSchema[]
   relationships: RelationshipSchema[]
+  presence: ChannelPresence[]
+}
+
+export interface ChannelMessage {
+  id: string
+  channel: string
+  sender: string
+  text: string
+  timestamp?: string
+  from_me: boolean
+  media_type: string
+  has_media: boolean
+}
+
+export interface PersonMessagesResponse {
+  person_id: string
+  messages: ChannelMessage[]
+  presence: ChannelPresence[]
+  total: number
+  has_more: boolean
+}
+
+export interface SendMessageResponse {
+  success: boolean
+  channel: string
+  recipient: string
+  message: string
 }
 
 export interface UpdatePersonRequest {
@@ -511,6 +549,103 @@ export interface TimelineResponse {
   entries: TimelineEntry[]
   total: number
   has_more: boolean
+}
+
+export interface ContactSourceInfo {
+  id: string
+  name: string
+  type: string // 'apple' | 'google' | 'whatsapp' | 'telegram'
+  available: boolean
+  estimated_count: number
+  status: string // 'ready' | 'unavailable' | 'error' | 'not_configured'
+  description: string
+}
+
+export interface ContactSourcesResponse {
+  sources: ContactSourceInfo[]
+  total_available: number
+  people_count: number
+}
+
+export interface ImportResponse {
+  source_id: string
+  imported: number
+  updated: number
+  skipped: number
+  message: string
+}
+
+// -----------------------------------------------------------------------------
+// Orbit Visualization
+// -----------------------------------------------------------------------------
+
+export interface OrbitNode {
+  id: string
+  name: string
+  importance: number
+  interaction_count: number
+  trend?: string
+  organization?: string
+  days_since?: number
+}
+
+export interface OrbitResponse {
+  nodes: OrbitNode[]
+  total: number
+}
+
+// -----------------------------------------------------------------------------
+// People Health
+// -----------------------------------------------------------------------------
+
+export interface PipelineStatus {
+  name: string
+  last_run?: string
+  stale: boolean
+  stale_days: number
+  description: string
+  can_trigger: boolean
+}
+
+export interface ChannelHealth {
+  channel: string
+  connected: boolean
+  configured: boolean
+  contact_count: number
+  detail: string
+}
+
+export interface DataQuality {
+  total_contacts: number
+  with_interactions: number
+  with_metadata: number
+  with_identifiers: number
+  enrichment_pct: number
+  importance_dist: Record<string, number>
+  needs_enrichment: number
+}
+
+export interface HealthIssue {
+  severity: string // 'info' | 'warning' | 'error'
+  message: string
+  action?: string
+  action_id?: string
+}
+
+export interface PeopleHealthResponse {
+  healthy: boolean
+  data_quality: DataQuality
+  pipelines: PipelineStatus[]
+  channels: ChannelHealth[]
+  integrations: Array<{ name: string; status: string; configured?: string }>
+  issues: HealthIssue[]
+}
+
+export interface PipelineRunResponse {
+  pipeline: string
+  started: boolean
+  message: string
+  output: string
 }
 
 // -----------------------------------------------------------------------------

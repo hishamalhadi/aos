@@ -270,10 +270,21 @@ class WorkResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class LocationResponse(BaseModel):
+    """Operator location (nested in operator.yaml)."""
+
+    city: str | None = Field(None, description="City name")
+    name: str | None = Field(None, description="Location display name")
+    latitude: float | None = Field(None, description="Latitude")
+    longitude: float | None = Field(None, description="Longitude")
+
+
 class OperatorResponse(BaseModel):
     """Operator configuration (from operator.yaml)."""
 
-    name: str = Field(..., description="Operator name")
+    name: str = Field(..., description="Operator full name")
+    nickname: str | None = Field(None, description="What Qareen calls the operator")
+    prompt: str | None = Field(None, description="Communication preferences — how the operator wants to be spoken to")
     timezone: str = Field("America/Chicago", description="IANA timezone")
     language: str = Field("en", description="Primary language")
     agent_name: str = Field("chief", description="Default agent")
@@ -284,11 +295,15 @@ class OperatorResponse(BaseModel):
     quiet_hours_end: str = Field("06:00", description="Quiet hours end")
     business_type: str | None = Field(None, description="Business type")
     role: str | None = Field(None, description="Operator role")
+    location: LocationResponse | None = Field(None, description="Operator location")
 
 
 class UpdateOperatorRequest(BaseModel):
     """Request body for updating operator config. All fields optional."""
 
+    name: str | None = Field(None, description="New name")
+    nickname: str | None = Field(None, description="New nickname")
+    prompt: str | None = Field(None, description="New communication preferences")
     timezone: str | None = Field(None, description="New timezone")
     language: str | None = Field(None, description="New language")
     agent_name: str | None = Field(None, description="New default agent")
@@ -299,6 +314,7 @@ class UpdateOperatorRequest(BaseModel):
     quiet_hours_end: str | None = Field(None, description="New quiet end")
     business_type: str | None = Field(None, description="New business type")
     role: str | None = Field(None, description="New role")
+    locale: str | None = Field(None, description="New locale")
 
 
 class AccountsResponse(BaseModel):
@@ -531,6 +547,15 @@ class RelationshipSchema(BaseModel):
     target_name: str | None = Field(None, description="Target display name")
 
 
+class ChannelPresenceSchema(BaseModel):
+    """Per-channel presence info for a person."""
+
+    channel: str = Field(..., description="Channel name")
+    identifier: str = Field("", description="Person's ID on this channel")
+    last_message_at: str | None = Field(None, description="Timestamp of last message")
+    available: bool = Field(True, description="Whether the channel adapter is reachable")
+
+
 class PersonDetailResponse(PersonResponse):
     """Detailed person view with interactions and relationships."""
 
@@ -545,6 +570,9 @@ class PersonDetailResponse(PersonResponse):
     )
     relationships: list[RelationshipSchema] = Field(
         default_factory=list, description="Relationship links"
+    )
+    presence: list[ChannelPresenceSchema] = Field(
+        default_factory=list, description="Per-channel presence/last-active info"
     )
 
 
