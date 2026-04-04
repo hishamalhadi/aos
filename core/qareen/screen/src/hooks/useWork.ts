@@ -2,16 +2,34 @@ import { useQuery } from '@tanstack/react-query';
 
 const API = '/api';
 
+export interface TaskHandoff {
+  state: string;
+  next_step: string;
+  files: string[];
+  decisions: string[];
+  blockers: string[];
+  session_id?: string;
+  timestamp?: string;
+}
+
 export interface Task {
   id: string;
   title: string;
   status: 'todo' | 'active' | 'waiting' | 'done' | 'cancelled';
   priority: number;
   project: string | null;
+  description: string | null;
+  assigned_to: string | null;
+  created_by: string | null;
   created: string;
+  started: string | null;
   completed: string | null;
+  due: string | null;
   tags: string[];
+  parent_id: string | null;
   subtasks?: Task[];
+  handoff?: TaskHandoff | null;
+  recurrence: string | null;
   source?: string;
 }
 
