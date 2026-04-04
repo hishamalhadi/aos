@@ -1,0 +1,97 @@
+id: google-workspace
+name: Google Workspace
+icon: mail
+color: "#EA4335"
+type: mcp
+tier: 2
+category: productivity
+description: Gmail, Calendar, Drive, Sheets, Docs via workspace-mcp. Supports multiple accounts.
+
+capabilities:
+  - id: gmail
+    label: Gmail
+    description: Read, send, search, labels, drafts across all accounts
+  - id: calendar
+    label: Google Calendar
+    description: Read events, create events, schedule awareness
+  - id: drive
+    label: Google Drive
+    description: List, search, read, create, share files
+  - id: sheets
+    label: Google Sheets
+    description: Read and write spreadsheet data
+  - id: docs
+    label: Google Docs
+    description: Read and create documents
+
+auth:
+  method: oauth
+  credentials:
+    - key: GOOGLE_OAUTH_CLIENT_ID
+      label: OAuth Client ID
+      required: true
+    - key: GOOGLE_OAUTH_CLIENT_SECRET
+      label: OAuth Client Secret
+      required: true
+  tokens:
+    path: ~/.google_workspace_mcp/credentials/
+    per_account: true
+    pattern: "*.json"
+
+health:
+  checks:
+    - name: credentials
+      type: keychain
+      keys: [GOOGLE_OAUTH_CLIENT_ID, GOOGLE_OAUTH_CLIENT_SECRET]
+      description: OAuth app credentials exist in Keychain
+    - name: tokens
+      type: file_exists
+      path: ~/.google_workspace_mcp/credentials/*.json
+      description: At least one account has OAuth tokens
+    - name: mcp_registered
+      type: mcp_registered
+      server_name: google-workspace
+      description: MCP server registered in Claude Code
+
+accounts:
+  supports_multiple: true
+  identity_field: email
+  discover_from: ~/.google_workspace_mcp/credentials/
+  pattern: "*.json"
+  extract_identity: filename_stem
+
+n8n:
+  credential_types:
+    - gmailOAuth2
+    - googleCalendarOAuth2Api
+    - googleSheetsOAuth2Api
+    - googleDriveOAuth2Api
+  node_types:
+    - n8n-nodes-base.gmail
+    - n8n-nodes-base.googleCalendar
+    - n8n-nodes-base.googleSheets
+    - n8n-nodes-base.googleDrive
+
+automation_ideas:
+  - id: email_digest
+    name: Daily Email Digest
+    description: Summarize unread emails and send to Telegram every morning
+    required_also: [telegram]
+    recipe_hint: email_digest
+  - id: calendar_brief
+    name: Morning Calendar Brief
+    description: Send today's schedule to Telegram each morning
+    required_also: [telegram]
+    recipe_hint: calendar_to_telegram
+  - id: drive_monitor
+    name: New File Alert
+    description: Notify on Telegram when new files appear in a Drive folder
+    required_also: [telegram]
+  - id: sheets_report
+    name: Spreadsheet Report
+    description: Pull data from a Google Sheet and send a summary on schedule
+    required_also: [telegram]
+  - id: form_to_sheets
+    name: Form to Sheets
+    description: Collect form submissions and log them in a Google Sheet
+    recipe_hint: form_to_sheets

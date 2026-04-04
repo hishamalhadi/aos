@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Zap, Play, ChevronDown, ChevronRight,
@@ -13,7 +14,9 @@ import {
   useGenerateAutomation, useDeployAutomation,
   useActivateAutomation, useDeactivateAutomation,
   useAutomationContext, useExecutionHistory,
+  useAutomationSuggestions,
   type N8nAutomation, type GenerateResult,
+  type AutomationSuggestion,
 } from '@/hooks/useAutomations';
 
 // ---------------------------------------------------------------------------
@@ -150,6 +153,84 @@ function SystemGroup({
   );
 }
 
+// ── Suggestion card ──
+
+const CONNECTOR_ICONS: Record<string, typeof Zap> = {
+  mail: Mail, send: Send, github: Globe, 'book-open': Zap,
+  calendar: Calendar, users: Globe, 'message-circle': MessageCircle,
+  'sticky-note': Zap, 'check-square': Check,
+};
+
+function SuggestionCard({
+  suggestion,
+  onSetUp,
+}: {
+  suggestion: AutomationSuggestion;
+  onSetUp: (description: string) => void;
+}) {
+  const ConnectorIcon = CONNECTOR_ICONS[suggestion.source_icon] || Zap;
+
+  return (
+    <div
+      className="rounded-[10px] border border-border p-4 group transition-all duration-150 hover:border-border-secondary cursor-pointer"
+      style={{ background: 'var(--glass-bg)', backdropFilter: 'blur(12px)' }}
+      onClick={() => onSetUp(suggestion.description)}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className="w-8 h-8 rounded-[7px] flex items-center justify-center flex-shrink-0 mt-0.5"
+          style={{ backgroundColor: suggestion.source_color + '18' }}
+        >
+          <ConnectorIcon className="w-4 h-4" style={{ color: suggestion.source_color }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className="text-[13px] font-[560] text-text block">{suggestion.name}</span>
+          <p className="text-[11px] text-text-quaternary mt-1 leading-relaxed line-clamp-2">
+            {suggestion.description}
+          </p>
+        </div>
+      </div>
+      <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border">
+        <span className="text-[10px] text-text-quaternary">
+          {suggestion.source_connector_name}
+          {suggestion.required_connectors.length > 1 && ` + ${suggestion.required_connectors.length - 1} more`}
+        </span>
+        <span className="text-[11px] font-[510] text-accent opacity-0 group-hover:opacity-100 transition-opacity">
+          Set up
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function SuggestionGrid({
+  suggestions,
+  onSetUp,
+}: {
+  suggestions: AutomationSuggestion[];
+  onSetUp: (description: string) => void;
+}) {
+  if (suggestions.length === 0) return null;
+
+  return (
+    <div className="mb-8">
+      <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-3">
+        Suggested for you
+      </span>
+      <div className="grid grid-cols-2 gap-3">
+        {suggestions.slice(0, 6).map((s) => (
+          <SuggestionCard key={s.id} suggestion={s} onSetUp={onSetUp} />
+        ))}
+      </div>
+      {suggestions.length > 6 && (
+        <p className="text-[10px] text-text-quaternary mt-2 text-center">
+          {suggestions.length - 6} more suggestions available
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Helpers for automation cards ──
 
 const RECIPE_ICONS: Record<string, { trigger: typeof Clock; action: typeof Zap; triggerLabel: string; actionLabel: string }> = {
@@ -238,10 +319,12 @@ function N8nAutomationCard({
   automation,
   onActivate,
   onDeactivate,
+  onView,
 }: {
   automation: N8nAutomation;
   onActivate: () => void;
   onDeactivate: () => void;
+  onView: () => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
   const statusColors: Record<string, string> = {
@@ -257,8 +340,9 @@ function N8nAutomationCard({
 
   return (
     <div
-      className="rounded-[10px] border border-border p-4 mb-3 group transition-all duration-150 hover:border-border-secondary"
+      className="rounded-[10px] border border-border p-4 mb-3 group transition-all duration-150 hover:border-border-secondary cursor-pointer"
       style={{ background: 'var(--glass-bg)', backdropFilter: 'blur(12px)' }}
+      onClick={onView}
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
@@ -355,8 +439,8 @@ function N8nAutomationCard({
 
 // ── Natural language creation flow ──
 
-function GenerateFlow({ onClose }: { onClose: () => void }) {
-  const [input, setInput] = useState('');
+function GenerateFlow({ onClose, initialDescription }: { onClose: () => void; initialDescription?: string }) {
+  const [input, setInput] = useState(initialDescription ?? '');
   const generate = useGenerateAutomation();
   const deploy = useDeployAutomation();
   const { data: ctx } = useAutomationContext();
@@ -496,8 +580,11 @@ export default function AutomationsPage() {
   const { data: cronsData, isLoading } = useSystemCrons();
   const { data: n8nData } = useN8nAutomations();
   const { data: healthData } = useAutomationsHealth();
+  const { data: suggestionsData } = useAutomationSuggestions();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [showCreate, setShowCreate] = useState(false);
+  const [prefillDescription, setPrefillDescription] = useState<string | undefined>();
   const activate = useActivateAutomation();
   const deactivate = useDeactivateAutomation();
 
@@ -513,8 +600,14 @@ export default function AutomationsPage() {
     runMutation.mutate(id);
   }, [runMutation]);
 
+  const openCreate = useCallback((description?: string) => {
+    setPrefillDescription(description);
+    setShowCreate(true);
+  }, []);
+
   const systemCrons = cronsData?.system ?? [];
   const n8nAutomations = n8nData?.automations ?? [];
+  const suggestions = suggestionsData?.suggestions ?? [];
   const n8nHealthy = healthData?.status === 'ok';
 
   return (
@@ -531,7 +624,7 @@ export default function AutomationsPage() {
           </div>
         )}
         <button
-          onClick={() => setShowCreate(true)}
+          onClick={() => openCreate()}
           className="
             flex items-center gap-1.5 h-8 px-3
             rounded-full
@@ -561,19 +654,25 @@ export default function AutomationsPage() {
                 automation={a}
                 onActivate={() => activate.mutate(a.id)}
                 onDeactivate={() => deactivate.mutate(a.id)}
+                onView={() => navigate(`/automations/${a.id}`)}
               />
             ))}
           </div>
         )}
 
-        {/* Empty state */}
-        {n8nAutomations.length === 0 && !isLoading && (
+        {/* Suggestions grid — shown when there are suggestions */}
+        {suggestions.length > 0 && (
+          <SuggestionGrid suggestions={suggestions} onSetUp={(desc) => openCreate(desc)} />
+        )}
+
+        {/* Empty state — only when no automations AND no suggestions */}
+        {n8nAutomations.length === 0 && suggestions.length === 0 && !isLoading && (
           <div className="py-12">
             <p className="text-[13px] text-text-quaternary mb-4">
               No automations yet. Describe what you want automated and it'll run on your Mac Mini 24/7.
             </p>
             <button
-              onClick={() => setShowCreate(true)}
+              onClick={() => openCreate()}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[7px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5" /> Create your first automation
@@ -592,7 +691,12 @@ export default function AutomationsPage() {
       </div>
 
       {/* Create flow — natural language generation */}
-      {showCreate && <GenerateFlow onClose={() => setShowCreate(false)} />}
+      {showCreate && (
+        <GenerateFlow
+          onClose={() => { setShowCreate(false); setPrefillDescription(undefined); }}
+          initialDescription={prefillDescription}
+        />
+      )}
     </div>
   );
 }

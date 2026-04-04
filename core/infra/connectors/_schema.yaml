@@ -1,0 +1,37 @@
+# Connector Definition Schema
+# Each YAML file in this directory defines one external service.
+# The discovery engine reads these to know what to check.
+
+# Required fields:
+#   id:           Unique identifier (kebab-case)
+#   name:         Human-readable name
+#   icon:         Lucide icon name
+#   type:         mcp | service | cli | api | native
+#   tier:         1 (native) | 2 (builtin) | 3 (catalog)
+#   category:     productivity | communication | knowledge | development | data | ecommerce
+#   capabilities: List of { id, label, description }
+#
+# Optional fields:
+#   color:        Brand hex color (for UI)
+#   auth:         Authentication requirements
+#   health:       Health check definitions
+#   setup:        Setup instructions
+#   accounts:     Multi-account support config
+#   n8n:          n8n node mappings for automation recipes
+#   automation_ideas: Pre-built automation suggestions for this connector
+
+# Type definitions:
+#   mcp      -> Claude Code MCP server (tools appear natively in sessions)
+#   service  -> AOS LaunchAgent (persistent process on localhost)
+#   cli      -> Shell command (already authenticated via its own flow)
+#   api      -> REST API with Keychain credentials
+#   native   -> macOS native (AppleScript / EventKit / filesystem)
+
+# Health check types:
+#   keychain       -> Check that required secrets exist in macOS Keychain
+#   file_exists    -> Check that a file/glob path exists
+#   mcp_registered -> Check that MCP server is in ~/.claude/mcp.json
+#   command        -> Run a shell command, check exit code
+#   launchagent    -> Check that a LaunchAgent plist is loaded
+#   port           -> Check that a localhost port is responding
+#   app_exists     -> Check that an app exists in /Applications

@@ -1,0 +1,118 @@
+id: email_digest
+name: Daily Email Digest
+description: Reads unread emails from Gmail on a schedule and sends a summary to Telegram
+category: productivity
+tags: [email, gmail, digest, telegram, schedule, summary]
+tested_n8n_version: "2.x"
+required_credentials:
+  - google_workspace
+  - telegram
+
+variables:
+  - name: schedule_cron
+    description: When to send the digest (cron expression)
+    type: cron
+    default: "0 8 * * 1-5"
+    required: true
+    examples: ["0 8 * * *", "0 8 * * 1-5", "0 7 * * *"]
+  - name: gmail_label
+    description: Gmail label to check for unread messages
+    type: string
+    default: "INBOX"
+    examples: ["INBOX", "IMPORTANT", "CATEGORY_UPDATES"]
+  - name: max_results
+    description: Maximum number of emails to include
+    type: number
+    default: 10
+  - name: telegram_chat_id
+    description: Telegram chat ID to send the digest to
+    type: string
+    required: true
+  - name: workflow_name
+    description: Human-readable name
+    type: string
+    default: "Email Digest"
+
+template:
+  name: "{{workflow_name}}"
+  nodes:
+    - id: "trigger-1"
+      name: "Schedule"
+      type: "n8n-nodes-base.scheduleTrigger"
+      typeVersion: 1.2
+      position: [250, 300]
+      parameters:
+        rule:
+          interval:
+            - field: "cronExpression"
+              expression: "{{schedule_cron}}"
+    - id: "gmail-1"
+      name: "Get Emails"
+      type: "n8n-nodes-base.gmail"
+      typeVersion: 2.1
+      position: [450, 300]
+      parameters:
+        operation: "getAll"
+        returnAll: false
+        limit: "{{max_results}}"
+        filters:
+          labelIds:
+            - "{{gmail_label}}"
+          readStatus: "unread"
+        options:
+          dataPropertyAttachmentsPrefixName: ""
+      credentials:
+        gmailOAuth2:
+          id: null
+          name: "Gmail"
+    - id: "code-1"
+      name: "Format Digest"
+      type: "n8n-nodes-base.code"
+      typeVersion: 2
+      position: [650, 300]
+      parameters:
+        jsCode: |
+          const items = $input.all();
+          if (items.length === 0) {
+            return [{ json: { text: "📬 No unread emails — inbox clear!", empty: true } }];
+          }
+          const lines = items.map((item, i) => {
+            const from = item.json.from?.text || item.json.from || 'Unknown';
+            const subject = item.json.subject || '(no subject)';
+            const snippet = (item.json.snippet || '').substring(0, 100);
+            return `${i + 1}. *${subject}*\n   From: ${from}\n   ${snippet}`;
+          });
+          const text = `📬 *Email Digest* — ${items.length} unread\n\n${lines.join('\n\n')}`;
+          return [{ json: { text, count: items.length } }];
+    - id: "telegram-1"
+      name: "Send Digest"
+      type: "n8n-nodes-base.telegram"
+      typeVersion: 1.2
+      position: [850, 300]
+      parameters:
+        chatId: "{{telegram_chat_id}}"
+        text: "={{ $json.text }}"
+        additionalFields:
+          parse_mode: "Markdown"
+      credentials:
+        telegramApi:
+          id: null
+          name: "Telegram Bot"
+  connections:
+    Schedule:
+      main:
+        - - node: "Get Emails"
+            type: "main"
+            index: 0
+    Get Emails:
+      main:
+        - - node: "Format Digest"
+            type: "main"
+            index: 0
+    Format Digest:
+      main:
+        - - node: "Send Digest"
+            type: "main"
+            index: 0
+  settings:
+    executionOrder: "v1"

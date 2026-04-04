@@ -1,0 +1,51 @@
+id: apple-notes
+name: Notes
+icon: sticky-note
+color: "#FFCC00"
+type: native
+tier: 1
+category: knowledge
+description: Create, read, and search Apple Notes. Manage folders and organize content.
+
+capabilities:
+  - id: create_notes
+    label: Create Notes
+    description: Create new notes with title and body in a specified folder
+  - id: read_notes
+    label: Read Notes
+    description: Read the content of existing notes by title or ID
+  - id: search_notes
+    label: Search Notes
+    description: Search across all notes by keyword or phrase
+  - id: folder_management
+    label: Folder Management
+    description: List, create, and organize note folders
+
+auth:
+  method: system_permission
+  permissions:
+    - name: Notes access
+      description: Allow AOS to read and write Apple Notes
+      check: AppleScript execution succeeds
+
+health:
+  checks:
+    - name: app_exists
+      type: app_exists
+      path: /System/Applications/Notes.app
+    - name: applescript_access
+      type: command
+      command: "osascript -e 'tell application \"Notes\" to get name of folders' 2>/dev/null"
+      description: Can read note folders via AppleScript
+
+automation_ideas:
+  - id: save_web_clips
+    name: Save Web Clips to Notes
+    description: Save bookmarked or shared web content as Apple Notes entries
+    required_also: []
+    recipe_hint: notes_web_clip
+  - id: daily_journal_prompt
+    name: Daily Journal Prompt
+    description: Create a new note each morning with a journaling prompt
+    required_also: []
+    recipe_hint: notes_daily_journal

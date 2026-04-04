@@ -199,6 +199,47 @@ export function useAutomationContext() {
   });
 }
 
+export interface AutomationSuggestion {
+  id: string;
+  name: string;
+  description: string;
+  source_connector: string;
+  source_connector_name: string;
+  source_icon: string;
+  source_color: string;
+  recipe_hint: string;
+  required_connectors: string[];
+  category: string;
+  score: number;
+}
+
+export function useAutomationSuggestions() {
+  return useQuery({
+    queryKey: ['automation-suggestions'],
+    queryFn: async (): Promise<{ suggestions: AutomationSuggestion[]; total: number; context: Record<string, unknown> }> => {
+      const res = await fetch('/api/automations/suggestions');
+      if (!res.ok) return { suggestions: [], total: 0, context: {} };
+      return res.json();
+    },
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+}
+
+export function useWorkflowDetail(automationId: string | null) {
+  return useQuery({
+    queryKey: ['workflow-detail', automationId],
+    queryFn: async () => {
+      if (!automationId) return null;
+      const res = await fetch(`/api/automations/${automationId}/workflow`);
+      if (!res.ok) throw new Error(`API error: ${res.status}`);
+      return res.json();
+    },
+    enabled: !!automationId,
+    staleTime: 30_000,
+  });
+}
+
 export function useExecutionHistory(automationId: string | null) {
   return useQuery({
     queryKey: ['execution-history', automationId],

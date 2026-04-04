@@ -1,0 +1,60 @@
+id: obsidian
+name: Obsidian Vault
+icon: book-open
+color: "#7C3AED"
+type: cli
+tier: 2
+category: knowledge
+description: Knowledge vault with daily notes, sessions, QMD semantic search. The memory layer of AOS.
+
+capabilities:
+  - id: read_notes
+    label: Read Notes
+    description: Read any note from the vault by path or search
+  - id: create_notes
+    label: Create Notes
+    description: Create new notes with frontmatter and content
+  - id: daily_notes
+    label: Daily Notes
+    description: Read and append to daily log entries
+  - id: search
+    label: Semantic Search
+    description: Full-text and semantic search via QMD
+  - id: tags
+    label: Tags & Properties
+    description: Query by tags, read/write YAML frontmatter
+
+auth:
+  method: system_permission
+  permissions:
+    - name: Vault path
+      description: Vault directory exists at ~/vault
+      check: directory exists
+
+health:
+  checks:
+    - name: vault_exists
+      type: file_exists
+      path: ~/vault/SCHEMA.md
+      description: Vault directory exists with schema
+    - name: qmd_available
+      type: command
+      command: "which qmd >/dev/null 2>&1 || test -f ~/.aos/services/qmd/venv/bin/qmd"
+      description: QMD search engine is available
+    - name: cli_available
+      type: command
+      command: "which obsidian >/dev/null 2>&1"
+      description: Obsidian CLI is installed
+
+automation_ideas:
+  - id: daily_compile
+    name: Daily Log Compilation
+    description: Compile communications, tasks, and journal into the daily note
+  - id: capture_to_vault
+    name: Quick Capture
+    description: Save content from Telegram or email directly into vault captures
+    required_also: [telegram]
+  - id: weekly_review
+    name: Weekly Review Generator
+    description: Auto-generate weekly review from daily logs every Friday
+    required_also: [telegram]

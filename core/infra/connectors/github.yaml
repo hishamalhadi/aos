@@ -1,0 +1,57 @@
+id: github
+name: GitHub
+icon: github
+color: "#24292E"
+type: cli
+tier: 2
+category: development
+description: Repos, PRs, issues, actions via the gh CLI. Code review notifications and release tracking.
+
+capabilities:
+  - id: repos
+    label: Repository Management
+    description: List, create, clone, fork repositories
+  - id: pull_requests
+    label: Pull Requests
+    description: Create, review, merge PRs. List checks and comments.
+  - id: issues
+    label: Issues
+    description: Create, search, assign, close issues
+  - id: actions
+    label: GitHub Actions
+    description: View workflow runs, re-run failed jobs
+  - id: releases
+    label: Releases
+    description: List releases, create new releases
+
+auth:
+  method: cli_auth
+  cli:
+    command: gh
+    auth_command: gh auth login
+    verify_command: gh auth status
+
+health:
+  checks:
+    - name: cli_installed
+      type: command
+      command: "which gh >/dev/null 2>&1"
+      description: gh CLI is installed
+    - name: authenticated
+      type: command
+      command: "gh auth status >/dev/null 2>&1"
+      description: gh CLI is authenticated
+
+automation_ideas:
+  - id: pr_notify
+    name: PR Notifications
+    description: Get Telegram alerts when PRs are opened or reviewed on your repos
+    required_also: [telegram]
+  - id: issue_digest
+    name: Issue Digest
+    description: Daily summary of open issues across your repos
+    required_also: [telegram]
+  - id: release_alert
+    name: Release Alerts
+    description: Notify when new releases are published on watched repos
+    required_also: [telegram]

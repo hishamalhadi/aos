@@ -19,6 +19,7 @@ const Org = lazy(() => import('@/pages/Org'));
 // ── Sub-views ──
 const Sessions = lazy(() => import('@/pages/Sessions'));
 const SessionDetail = lazy(() => import('@/pages/SessionDetail'));
+const AutomationEditor = lazy(() => import('@/pages/AutomationEditor'));
 
 // ── Review: pages with real UI, kept for evaluation ──
 const Meeting = lazy(() => import('@/pages/Meeting'));
@@ -71,6 +72,8 @@ export default function App() {
           <Route path="/approvals" element={<Approvals />} />
 
           <Route path="/automations" element={<Automations />} />
+          <Route path="/automations/:id" element={<AutomationEditor />} />
+          <Route path="/automations/:id/edit" element={<AutomationEditor />} />
 
         </Route>
       </Routes>

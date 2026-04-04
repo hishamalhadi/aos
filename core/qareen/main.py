@@ -711,6 +711,7 @@ _api_routers = [
     ("qareen.api.companion", "companion"),
     ("qareen.api.meetings", "meetings"),
     ("qareen.api.days", "days"),
+    ("qareen.api.connectors", "connectors"),
 ]
 
 for module_path, name in _api_routers:

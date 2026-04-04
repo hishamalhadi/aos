@@ -273,6 +273,52 @@ async def list_n8n_automations(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@router.get("/suggestions")
+async def get_suggestions(request: Request) -> JSONResponse:
+    """Get personalized automation suggestions based on connected services and operator data."""
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(AOS_HOME / "core"))
+        # Inline the suggestions logic to avoid router loading issues
+        from qareen.api.suggestions import (
+            _connector_suggestions, _enrich_suggestions,
+            _get_operator, _get_unread_email_count, _get_today_event_count,
+            _get_top_contacts, _get_work_stats, _get_google_account_count,
+            _get_deployed_recipe_ids,
+        )
+        from infra.connectors.discover import discover_all
+
+        connectors = [c.to_dict() for c in discover_all()]
+        deployed = _get_deployed_recipe_ids()
+        suggestions = _connector_suggestions(connectors, deployed)
+        operator = _get_operator()
+        unread = _get_unread_email_count()
+        events = _get_today_event_count()
+        contacts = _get_top_contacts(5)
+        work = _get_work_stats()
+        google_accts = _get_google_account_count()
+
+        suggestions = _enrich_suggestions(
+            suggestions, operator, unread, events, contacts, work, google_accts,
+        )
+        suggestions.sort(key=lambda s: s["score"], reverse=True)
+
+        return JSONResponse({
+            "suggestions": suggestions[:12],
+            "total": len(suggestions),
+            "context": {
+                "connectors_connected": sum(1 for c in connectors if c["status"] in ("connected", "partial")),
+                "unread_emails": unread,
+                "today_events": events,
+                "active_tasks": work.get("active_tasks"),
+                "top_contact": contacts[0]["canonical_name"] if contacts else None,
+            },
+        })
+    except Exception as e:
+        logger.exception("Suggestions failed")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.get("/context")
 async def automations_context(request: Request) -> JSONResponse:
     """Return user context for the workflow generator.
@@ -563,6 +609,52 @@ async def deactivate_automation(automation_id: str, request: Request) -> JSONRes
         conn.commit()
         conn.close()
         return JSONResponse({"status": "paused"})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/{automation_id}/workflow")
+async def get_workflow(automation_id: str, request: Request) -> JSONResponse:
+    """Get the full n8n workflow JSON (nodes + connections) for an automation."""
+    n8n_client = getattr(request.app.state, "n8n_client", None)
+    if not n8n_client:
+        return JSONResponse({"error": "n8n not available"}, status_code=503)
+
+    auto = _get_n8n_automation(automation_id)
+    if not auto:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    try:
+        workflow = await n8n_client.get_workflow(auto["n8n_workflow_id"])
+        return JSONResponse(workflow)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.put("/{automation_id}/workflow")
+async def update_workflow(automation_id: str, request: Request) -> JSONResponse:
+    """Update the n8n workflow (nodes + connections) for an automation."""
+    n8n_client = getattr(request.app.state, "n8n_client", None)
+    if not n8n_client:
+        return JSONResponse({"error": "n8n not available"}, status_code=503)
+
+    auto = _get_n8n_automation(automation_id)
+    if not auto:
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    body = await request.json()
+    try:
+        result = await n8n_client.update_workflow(auto["n8n_workflow_id"], body)
+
+        # Update name in qareen.db if changed
+        new_name = body.get("name")
+        if new_name:
+            conn = _get_db()
+            conn.execute("UPDATE automations SET name = ? WHERE id = ?", (new_name, automation_id))
+            conn.commit()
+            conn.close()
+
+        return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
