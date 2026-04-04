@@ -49,6 +49,8 @@ class ResolverCache:
         self._conn = conn
         self._cache: dict[str, str | None] = {}
         self._resolve_fn = None
+        self._pushnames: dict[str, str] = {}  # JID → display name
+        self._unresolved: list[dict] = []  # tracks unresolved handles for later triage
 
     def _get_resolver(self):
         """Lazy-load the resolver (it imports db module)."""
@@ -102,12 +104,54 @@ class ResolverCache:
             if row:
                 return row[0]
 
-        # WhatsApp JID
+        # WhatsApp JID (@s.whatsapp.net has phone, @lid doesn't)
         if "@s.whatsapp.net" in handle:
             phone = handle.split("@")[0]
             return self._try_identifier(phone)
 
+        # @lid format — no phone number available, can't resolve by identifier
+        # Will fall through to name-based resolver in resolve()
         return None
+
+    def load_pushnames(self):
+        """Load WhatsApp pushnames from local database for name-based resolution."""
+        wa_db = Path.home() / "Library" / "Group Containers" / \
+            "group.net.whatsapp.WhatsApp.shared" / "ChatStorage.sqlite"
+        if not wa_db.exists():
+            return
+        try:
+            import sqlite3 as _sql
+            conn = _sql.connect(str(wa_db))
+            conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+            rows = conn.execute(
+                "SELECT ZJID, ZPUSHNAME FROM ZWAPROFILEPUSHNAME WHERE ZPUSHNAME IS NOT NULL"
+            ).fetchall()
+            conn.close()
+            for row in rows:
+                jid = row.get("ZJID", "")
+                name = (row.get("ZPUSHNAME") or "").strip()
+                if jid and name:
+                    self._pushnames[jid] = name
+            log.info(f"  Loaded {len(self._pushnames)} WhatsApp pushnames")
+        except Exception as e:
+            log.warning(f"  Could not load WhatsApp pushnames: {e}")
+
+    def _create_person_from_pushname(self, jid: str, name: str) -> str | None:
+        """Create a new person record from a WhatsApp pushname."""
+        if not name or len(name) < 2:
+            return None
+        # Skip emoji-only names or single characters
+        alpha = "".join(c for c in name if c.isalpha() or c.isspace()).strip()
+        if len(alpha) < 2:
+            return None
+
+        pid = people_db.insert_person(self._conn, name=name, importance=4)
+        if pid:
+            # Store the JID as an identifier so future extractions resolve immediately
+            phone = jid.split("@")[0] if "@" in jid else jid
+            people_db.add_identifier(self._conn, pid, type="whatsapp", value=jid, normalized=phone, source="pushname")
+            log.info(f"    Created person '{name}' ({pid}) from WhatsApp pushname")
+        return pid
 
     def resolve(self, handle: str) -> str | None:
         """Resolve a handle to a person_id, using cache.
@@ -132,17 +176,60 @@ class ResolverCache:
         try:
             result = resolver(handle, conn=self._conn)
             pid = result.get("person_id") if result.get("resolved") else None
-            self._cache[handle] = pid
-            return pid
+            if pid:
+                self._cache[handle] = pid
+                return pid
         except Exception:
-            self._cache[handle] = None
-            return None
+            pass
+
+        # For WhatsApp @lid JIDs, try pushname → name resolver → auto-create
+        pushname = self._pushnames.get(handle)
+        if pushname and "@lid" in handle:
+            # Try matching pushname to existing person by name
+            try:
+                result = resolver(pushname, conn=self._conn)
+                pid = result.get("person_id") if result.get("resolved") else None
+                if pid:
+                    # Also store the JID as identifier for future fast resolution
+                    phone = handle.split("@")[0]
+                    people_db.add_identifier(self._conn, pid, type="whatsapp", value=handle, normalized=phone, source="pushname")
+                    self._cache[handle] = pid
+                    return pid
+            except Exception:
+                pass
+
+            # No existing person matches — create from pushname
+            pid = self._create_person_from_pushname(handle, pushname)
+            if pid:
+                self._cache[handle] = pid
+                return pid
+
+        # Track unresolved for triage
+        if handle not in self._cache:
+            self._unresolved.append({
+                "handle": handle,
+                "pushname": pushname,
+                "channel": "whatsapp" if "@" in handle and ("lid" in handle or "whatsapp" in handle) else "unknown",
+            })
+
+        self._cache[handle] = None
+        return None
+
+    @property
+    def unresolved_handles(self) -> list[dict]:
+        return self._unresolved
 
     @property
     def stats(self) -> dict:
         total = len(self._cache)
         resolved = sum(1 for v in self._cache.values() if v is not None)
-        return {"total_handles": total, "resolved": resolved, "unresolved": total - resolved}
+        return {
+            "total_handles": total,
+            "resolved": resolved,
+            "unresolved": total - resolved,
+            "pushnames_loaded": len(self._pushnames),
+            "created_from_pushname": sum(1 for u in self._unresolved if u.get("pushname")),
+        }
 
 
 # ── Interaction grouping ─────────────────────────────────
@@ -186,7 +273,13 @@ def _group_messages(messages, resolver: ResolverCache) -> dict:
                 # We don't know WHO in the group we're talking to
                 continue
             # For DM outbound, resolve the conversation partner
-            handle = msg.conversation_id
+            # iMessage conversation_id is a chat rowid (integer), not a phone/email.
+            # Use chat_identifier (phone/email) or handle_id when available.
+            handle = (
+                msg.metadata.get("chat_identifier")
+                or msg.metadata.get("handle_id")
+                or msg.conversation_id
+            )
             person_id = resolver.resolve(handle)
         else:
             if is_group:
@@ -279,15 +372,27 @@ def compute_relationship_state(conn):
         else:
             avg_days = None
 
-        # Trajectory
+        # Trajectory — requires bidirectional communication for "growing"
         count_30d = row[5] or 0
         count_90d = row[6] or 0
+        outbound_30d = row[8] or 0
+        inbound_30d = row[9] or 0
+        has_inbound = inbound_30d > 0
+        has_outbound = outbound_30d > 0
+        bidirectional = has_inbound and has_outbound
+
         if count_90d == 0:
             trajectory = "dormant"
         elif count_30d == 0:
             trajectory = "drifting"
-        elif count_30d > (count_90d / 3) * 1.5:
+        elif bidirectional and count_30d > (count_90d / 3) * 1.5:
+            # Growing requires: frequency accelerating AND two-way communication
             trajectory = "growing"
+        elif bidirectional:
+            trajectory = "stable"
+        elif has_outbound and not has_inbound:
+            # Outbound-only (ordering pizza, messaging businesses) = not a relationship
+            trajectory = "stable"
         else:
             trajectory = "stable"
 
@@ -387,6 +492,63 @@ def extract_channel(adapter, days: int, conn, resolver: ResolverCache, dry_run: 
     }
 
 
+def _classify_unresolved(conn):
+    """Classify unresolved handles as person/service/spam/promo.
+
+    Uses name patterns + message count heuristics. Runs after extraction.
+    """
+    import re
+
+    rows = conn.execute(
+        "SELECT handle, display_name, message_count, channel "
+        "FROM unresolved_handles WHERE classification = 'unknown'"
+    ).fetchall()
+
+    if not rows:
+        return
+
+    service_patterns = [
+        "shop", "store", "pizza", "food", "delivery", "service",
+        "clinic", "hospital", "bank", "insurance", "pharmacy",
+        "restaurant", "gym", "salon", "laundry", "repair",
+        "uber", "careem", "courier", "taxi", "driver",
+        "alert", "notification", "verify", "otp", "code",
+        "promo", "offer", "sale", "discount", "deal",
+        "noreply", "no-reply", "support", "team", "info@",
+    ]
+
+    classified = 0
+    for row in rows:
+        handle = row["handle"]
+        name = (row["display_name"] or "").lower()
+        msgs = row["message_count"] or 0
+
+        classification = "person"  # default assumption
+
+        # Phone-number-only name → likely service
+        if name and re.match(r'^[\+\d\s\-\(\)]+$', name.strip()):
+            classification = "service"
+        # Name matches service patterns
+        elif any(p in name for p in service_patterns):
+            classification = "service"
+        # Very low message count + no name → probably spam
+        elif not name and msgs <= 1:
+            classification = "spam"
+        # Name is all caps (common for businesses)
+        elif name and name == name.upper() and len(name) > 3:
+            classification = "service"
+
+        conn.execute(
+            "UPDATE unresolved_handles SET classification = ? WHERE handle = ?",
+            (classification, handle),
+        )
+        classified += 1
+
+    conn.commit()
+    if classified:
+        log.info(f"  Classified {classified} unresolved handles")
+
+
 def run_extraction(days: int = 365, channels: list[str] | None = None, dry_run: bool = False) -> dict:
     """Run the full extraction pipeline across all available adapters.
 
@@ -399,7 +561,25 @@ def run_extraction(days: int = 365, channels: list[str] | None = None, dry_run: 
         Summary dict with per-channel stats
     """
     conn = people_db.connect()
+
+    # Ensure unresolved_handles table exists (idempotent)
+    conn.executescript("""
+        CREATE TABLE IF NOT EXISTS unresolved_handles (
+            handle TEXT PRIMARY KEY,
+            channel TEXT NOT NULL DEFAULT 'unknown',
+            display_name TEXT,
+            first_seen INTEGER,
+            last_seen INTEGER,
+            message_count INTEGER DEFAULT 0,
+            classification TEXT DEFAULT 'unknown',
+            resolved_to TEXT,
+            FOREIGN KEY (resolved_to) REFERENCES people(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_unresolved_class ON unresolved_handles(classification);
+    """)
+
     resolver = ResolverCache(conn)
+    resolver.load_pushnames()
 
     # Load adapters — registry for live services, plus local history adapters
     adapters = []
@@ -456,6 +636,23 @@ def run_extraction(days: int = 365, channels: list[str] | None = None, dry_run: 
         log.info("Recomputing relationship state...")
         state_count = compute_relationship_state(conn)
         log.info(f"  Updated state for {state_count} people")
+
+        # Persist unresolved handles for triage
+        ts = people_db.now_ts()
+        for uh in resolver.unresolved_handles:
+            conn.execute("""
+                INSERT INTO unresolved_handles (handle, channel, display_name, first_seen, last_seen, message_count)
+                VALUES (?, ?, ?, ?, ?, 1)
+                ON CONFLICT(handle) DO UPDATE SET
+                    last_seen = ?, message_count = message_count + 1,
+                    display_name = COALESCE(excluded.display_name, display_name)
+            """, (uh["handle"], uh["channel"], uh.get("pushname"), ts, ts, ts))
+        if resolver.unresolved_handles:
+            conn.commit()
+            log.info(f"  Tracked {len(resolver.unresolved_handles)} unresolved handles")
+
+        # Classify unresolved handles
+        _classify_unresolved(conn)
     else:
         state_count = 0
 
