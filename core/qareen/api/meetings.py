@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
@@ -409,6 +409,20 @@ async def get_meeting(mid: str):
         return JSONResponse(data)
 
     return JSONResponse({"error": "Not found"}, status_code=404)
+
+@router.get("/companion/meetings/{mid}/audio")
+async def get_meeting_audio(mid: str):
+    """Serve the audio file for a meeting/session."""
+    data = _get_session(mid) or _get_companion_session(mid)
+    if not data:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+    audio_path = data.get("audio_path", "")
+    if not audio_path:
+        return JSONResponse({"error": "No audio recorded"}, status_code=404)
+    p = Path(audio_path)
+    if not p.is_file() or p.stat().st_size <= 44:
+        return JSONResponse({"error": "Audio file empty or missing"}, status_code=404)
+    return FileResponse(str(p), media_type="audio/wav", filename=f"{mid}.wav")
 
 @router.delete("/companion/meetings/{mid}")
 async def delete_meeting(mid: str):

@@ -910,7 +910,7 @@ async def _execute_card_action(
             if is_update:
                 result = await registry.execute("complete_task", {
                     "ontology": ontology,
-                    "task_id": card_data.get("task_title", ""),
+                    "task_id": card_data.get("existing_task_id", ""),
                 }, actor="operator")
                 result_data["action"] = "complete_task"
                 result_data["result"] = result

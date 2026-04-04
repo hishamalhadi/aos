@@ -188,11 +188,9 @@ export function SessionLauncher({ onStartSession }: SessionLauncherProps) {
     started.current = true
 
     async function connectMic() {
-      // Try immediately
+      // Try immediately — if no mic, retry once after 2s (USB devices can be slow)
       let ok = await startAnalyser()
-      // If failed, retry after 2s (USB devices can be slow to enumerate)
       if (!ok) {
-        console.log('[Mic] First attempt failed, retrying in 2s...')
         await new Promise(r => setTimeout(r, 2000))
         ok = await startAnalyser()
       }
@@ -221,18 +219,9 @@ export function SessionLauncher({ onStartSession }: SessionLauncherProps) {
     }
   }, [startAnalyser, stopAnalyser, getAmplitude])
 
-  // Retry speech recognition on first user click if it was blocked (once only)
+  // Speech retry removed — user has explicit "Retry" button.
+  // Auto-retrying on any document click consumed pill interactions.
   const clickRetried = useRef(false)
-  useEffect(() => {
-    if (speechAvailable || clickRetried.current) return
-    function onInteraction() {
-      if (clickRetried.current) return
-      clickRetried.current = true
-      if (!speechAvailable && !micMuted) startRecognition()
-    }
-    document.addEventListener('click', onInteraction, { once: true })
-    return () => document.removeEventListener('click', onInteraction)
-  }, [speechAvailable, micMuted])
 
   function startRecognition() {
     stopRecognition()

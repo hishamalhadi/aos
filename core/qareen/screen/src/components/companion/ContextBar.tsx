@@ -98,8 +98,7 @@ export function ContextBar() {
         border border-border/40
         shadow-[0_2px_12px_rgba(0,0,0,0.3)]
         text-[11px] tracking-wide
-        font-[var(--font-sans)]
-      " style={{ fontFamily: 'var(--font-sans)' }}>
+      ">
         {/* Time */}
         <span className="text-text-secondary font-[510] tabular-nums">
           {formatTime(now)}
@@ -121,7 +120,9 @@ export function ContextBar() {
             </span>
             <Dot />
             <span className="text-text-tertiary font-[450]">
-              {prayer.nextPrayer} in {formatCountdown(prayer.minutesUntilNext)}
+              {prayer.minutesUntilNext <= 0
+                ? `${prayer.nextPrayer} now`
+                : `${prayer.nextPrayer} in ${formatCountdown(prayer.minutesUntilNext)}`}
             </span>
           </>
         )}

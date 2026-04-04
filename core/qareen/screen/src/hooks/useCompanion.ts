@@ -345,7 +345,8 @@ export function useCompanion() {
         if (lastSeq > 0) {
           fetch(`/companion/session/events?after=${lastSeq}`)
             .then((r) => (r.ok ? r.json() : []))
-            .then((events: { type: string; data: Record<string, unknown>; seq?: number }[]) => {
+            .then((events: unknown) => {
+              if (!Array.isArray(events)) return
               for (const evt of events) {
                 replayEvent(evt)
               }
@@ -825,9 +826,24 @@ export function useCompanion() {
 
         // Restore cards as approvals
         if (data.cards_json && Array.isArray(data.cards_json)) {
+          const typeMap: Record<string, 'task' | 'decision' | 'vault' | 'reply' | 'system'> = {
+            task: 'task', decision: 'decision', vault: 'vault',
+            reply: 'reply', system: 'system', suggestion: 'system',
+          }
           for (const card of data.cards_json) {
             if (cancelled) return
             storeState.addCard(card)
+            storeState.addApproval({
+              id: card.id,
+              type: typeMap[card.card_type] ?? 'system',
+              title: card.title,
+              description: card.body,
+              metadata: extractCardMetadata(card),
+              confidence: card.confidence,
+              status: 'pending',
+              createdAt: card.created_at,
+              card: card,
+            })
           }
         }
       } catch {
