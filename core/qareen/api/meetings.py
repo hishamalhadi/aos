@@ -281,7 +281,10 @@ async def get_meeting(mid: str):
     if _meeting.id == mid and _meeting.status not in ("ended", "idle"):
         return JSONResponse(_meeting.to_dict())
     data = _get_session(mid)
-    return JSONResponse(data) if data else JSONResponse({"error": "Not found"}, status_code=404)
+    if data:
+        return JSONResponse(data)
+
+    return JSONResponse({"error": "Not found"}, status_code=404)
 
 @router.delete("/companion/meetings/{mid}")
 async def delete_meeting(mid: str):
