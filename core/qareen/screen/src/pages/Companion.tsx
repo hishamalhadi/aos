@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useCompanion } from '@/hooks/useCompanion'
 import { useCompanionStore } from '@/store/companion'
 import { useApprovals } from '@/hooks/useApprovals'
@@ -173,7 +173,7 @@ export default function Companion() {
     fetch('/companion/session/pause', { method: 'POST' }).catch(() => {})
   }, [session, setSession, addPausedSession])
 
-  // Stop session — show end review
+  // Stop session — end via backend (generates AI summary), then show review
   const handleStop = useCallback(() => {
     if (!session) return
 
@@ -184,17 +184,16 @@ export default function Companion() {
     setSession(null)
     setPhase('review')
 
-    fetch('/companion/session/stop', { method: 'POST' }).catch(() => {})
+    // End session via backend — triggers final AI processing + summary generation
+    fetch(`/companion/session/${session.id}/end`, { method: 'POST' }).catch(() => {})
   }, [session, setSession, noteGroups, approvals])
 
-  // Save and close from end review
+  // Save and close from end review — export to vault if requested
   const handleSaveAndClose = useCallback(
     (summary: string, saveToVault: boolean) => {
-      if (endedSession) {
-        fetch(`/companion/session/${endedSession.id}/save`, {
+      if (endedSession && saveToVault) {
+        fetch(`/companion/session/${endedSession.id}/export-vault`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ summary, save_to_vault: saveToVault }),
         }).catch(() => {})
       }
 
@@ -231,6 +230,69 @@ export default function Companion() {
   const handleUndo = useCallback((id: string) => { undo(id) }, [undo])
   const handleDismiss = useCallback((id: string) => { dismiss(id) }, [dismiss])
   const handleEdit = useCallback((id: string) => { edit(id, {}) }, [edit])
+
+  // ---------------------------------------------------------------------------
+  // Keyboard shortcuts — global keydown when workspace is active
+  // ---------------------------------------------------------------------------
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Don't trigger if user is typing in an input/textarea
+      const tag = (e.target as HTMLElement)?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+
+      if (e.key === 'Escape') {
+        if (setupMode) {
+          e.preventDefault()
+          handleSetupCancel()
+        } else if (endedSession) {
+          e.preventDefault()
+          handleDiscardReview()
+        }
+        return
+      }
+
+      // Only process shortcuts when workspace is active
+      if (!session) return
+
+      const pendingApproval = approvals.find(
+        (a) => a.status === 'pending'
+      )
+      const undoingApproval = approvals.find(
+        (a) => a.status === 'approved_pending'
+      )
+
+      switch (e.key.toLowerCase()) {
+        case 'a':
+          if (pendingApproval) {
+            e.preventDefault()
+            handleStartApproval(pendingApproval.id)
+          }
+          break
+        case 'd':
+          if (pendingApproval) {
+            e.preventDefault()
+            handleDismiss(pendingApproval.id)
+          }
+          break
+        case 'u':
+          if (undoingApproval) {
+            e.preventDefault()
+            handleUndo(undoingApproval.id)
+          }
+          break
+        case 'e':
+          if (pendingApproval) {
+            e.preventDefault()
+            handleEdit(pendingApproval.id)
+          }
+          break
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [session, setupMode, endedSession, approvals, handleStartApproval, handleDismiss, handleUndo, handleEdit, handleSetupCancel, handleDiscardReview])
 
   // Determine current view
   const showEndReview = !session && endedSession

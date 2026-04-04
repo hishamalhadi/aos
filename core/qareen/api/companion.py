@@ -865,6 +865,26 @@ async def stop_audio_recording(session_id: str, request: Request) -> JSONRespons
 
 
 # ---------------------------------------------------------------------------
+# Routes — Vault Export
+# ---------------------------------------------------------------------------
+
+@router.post("/companion/session/{session_id}/export-vault")
+async def export_session_to_vault(session_id: str, request: Request) -> JSONResponse:
+    """Export a session to the vault as a markdown capture note."""
+    engine = getattr(request.app.state, "intelligence_engine", None)
+    if not engine:
+        return JSONResponse({"error": "Intelligence engine not available"}, status_code=503)
+
+    try:
+        vault_path = await engine.export_session_to_vault(session_id)
+        if not vault_path:
+            return JSONResponse({"error": "Session not found or export failed"}, status_code=404)
+        return JSONResponse({"session_id": session_id, "vault_path": vault_path, "exported": True})
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
 # Routes — Cards
 # ---------------------------------------------------------------------------
 

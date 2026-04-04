@@ -9,6 +9,11 @@ Single FastAPI process serving:
 
 from __future__ import annotations
 
+try:
+    import setproctitle; setproctitle.setproctitle("aos-qareen")
+except ImportError:
+    pass
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -222,6 +227,19 @@ async def lifespan(app: FastAPI):
             logger.info("Vault adapter registered (NOTE, DECISION)")
         except Exception:
             logger.exception("Failed to register vault adapter")
+
+        # Comms adapter — MESSAGE, CONVERSATION
+        try:
+            from qareen.ontology.adapters.comms import CommsAdapter
+
+            comms_adapter = CommsAdapter(
+                data_dir=AOS_DATA / "data",
+            )
+            ontology.register_adapter(ObjectType.MESSAGE, comms_adapter)
+            ontology.register_adapter(ObjectType.CONVERSATION, comms_adapter)
+            logger.info("Comms adapter registered (MESSAGE, CONVERSATION)")
+        except Exception:
+            logger.exception("Failed to register comms adapter")
 
     # -- Initialize audit log --------------------------------------------
 
@@ -497,6 +515,17 @@ async def lifespan(app: FastAPI):
     app.state.pipeline_engine = pipeline_engine
     app.state.version = _read_version()
 
+    # n8n automation client (optional — degrades gracefully if unavailable)
+    try:
+        import sys as _sys
+        _sys.path.insert(0, str(Path.home() / "aos" / "core"))
+        from automations.client import N8nClient
+        app.state.n8n_client = N8nClient()
+        logger.info("n8n client initialized")
+    except Exception:
+        app.state.n8n_client = None
+        logger.info("n8n client not available — automations will use legacy mode")
+
     logger.info("Qareen startup complete")
 
     yield
@@ -656,6 +685,8 @@ except ImportError:
 
 # API route modules — each is optional
 _api_routers = [
+    ("qareen.api.notifications", "notifications"),
+    ("qareen.api.automations", "automations"),
     ("qareen.api.work", "work"),
     ("qareen.api.config", "config"),
     ("qareen.api.agents", "agents"),
@@ -668,6 +699,7 @@ _api_routers = [
     ("qareen.api.pipelines", "pipelines"),
     ("qareen.api.companion", "companion"),
     ("qareen.api.meetings", "meetings"),
+    ("qareen.api.days", "days"),
 ]
 
 for module_path, name in _api_routers:
