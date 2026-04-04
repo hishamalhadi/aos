@@ -147,7 +147,7 @@ export default function MeetingPage() {
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 px-5 md:px-6 pt-5 pb-3">
-        <div className="flex items-center justify-between"><h1 className="type-title">Meetings</h1><div className="flex items-center gap-2"><div className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-green' : 'bg-red'}`} /><span className={`text-[10px] font-[510] ${online ? 'text-green' : 'text-red'}`}>{online ? 'Ready' : 'Offline'}</span></div></div>
+        <div className="flex items-center justify-end"><div className="flex items-center gap-2"><div className={`w-1.5 h-1.5 rounded-full ${online ? 'bg-green' : 'bg-red'}`} /><span className={`text-[10px] font-[510] ${online ? 'text-green' : 'text-red'}`}>{online ? 'Ready' : 'Offline'}</span></div></div>
       </div>
       <div className="flex-1 overflow-y-auto px-5 md:px-6">
         {error && <div className="mb-4 p-3 rounded-[5px] bg-red-muted border border-red/20"><p className="text-[12px] text-red">{error}</p></div>}

@@ -246,7 +246,7 @@ function SearchResultCard({ result, onSelect }: { result: SearchResult; onSelect
       <div className="flex items-start gap-3">
         <FileText className="w-4 h-4 text-text-quaternary shrink-0 mt-0.5 group-hover:text-accent transition-colors" style={{ transitionDuration: '80ms' }} />
         <div className="flex-1 min-w-0">
-          <span className="text-[15px] font-serif font-[500] text-text-secondary group-hover:text-text truncate block leading-tight transition-colors" style={{ transitionDuration: '80ms' }}>
+          <span className="text-[15px] font-[500] text-text-secondary group-hover:text-text truncate block leading-tight transition-colors" style={{ transitionDuration: '80ms' }}>
             {displayName}
           </span>
           <div className="flex items-center gap-2 mt-2">
@@ -261,7 +261,7 @@ function SearchResultCard({ result, onSelect }: { result: SearchResult; onSelect
             )}
           </div>
           {result.snippet && (
-            <p className="text-[13px] font-serif text-text-quaternary mt-2 line-clamp-2 leading-[1.6]">{result.snippet}</p>
+            <p className="text-[13px] text-text-quaternary mt-2 line-clamp-2 leading-[1.6]">{result.snippet}</p>
           )}
         </div>
       </div>
@@ -283,7 +283,7 @@ function CollectionCard({ collection, onClick }: { collection: Collection; onCli
       <div className="flex items-start gap-3">
         <span className="text-[20px] leading-none mt-0.5">{collectionIcons[collection.name] || '📁'}</span>
         <div className="flex-1 min-w-0">
-          <span className="text-[14px] font-serif font-[600] text-text group-hover:text-text block capitalize">
+          <span className="text-[14px] font-[600] text-text group-hover:text-text block capitalize">
             {collection.name}
           </span>
           <p className="text-[12px] text-text-quaternary mt-1 leading-[1.5]">
@@ -576,7 +576,7 @@ export default function VaultPage() {
   // -----------------------------------------------------------------------
   if (selectedPath && section === 'knowledge') {
     return (
-      <div className="h-full flex flex-col bg-bg">
+      <div className="h-full flex flex-col">
         <KnowledgeReader
           path={selectedPath}
           onBack={goBack}
@@ -602,7 +602,7 @@ export default function VaultPage() {
   // -----------------------------------------------------------------------
   if (file) {
     return (
-      <div className="h-full flex flex-col bg-bg">
+      <div className="h-full flex flex-col">
         {/* Top bar — touch-friendly on mobile */}
         <div className="shrink-0 px-4 sm:px-6 py-2 sm:py-3 border-b border-border">
           <div className="max-w-[720px] mx-auto flex items-center gap-1 sm:gap-2">
@@ -615,7 +615,7 @@ export default function VaultPage() {
             </button>
 
             {/* Breadcrumbs — hidden on mobile, show title instead */}
-            <h1 className="sm:hidden text-[14px] font-serif font-[590] text-text truncate flex-1">
+            <h1 className="sm:hidden text-[14px] font-[590] text-text truncate flex-1">
               {(file.frontmatter?.title as string) || file.title || file.name.replace('.md', '')}
             </h1>
             <div className="hidden sm:flex items-center gap-1 text-[11px] text-text-quaternary flex-1 min-w-0">
@@ -642,7 +642,7 @@ export default function VaultPage() {
         {/* Document content */}
         <div ref={contentRef} className="flex-1 overflow-y-auto">
           <div className="max-w-[720px] mx-auto px-5 sm:px-8 py-6 sm:py-10">
-            <h1 className="hidden sm:block text-[26px] font-serif font-[700] text-text tracking-[-0.025em] leading-[1.2]">
+            <h1 className="hidden sm:block text-[26px] font-[700] text-text tracking-[-0.025em] leading-[1.2]">
               {(file.frontmatter?.title as string) || file.title || file.name.replace('.md', '')}
             </h1>
             {file.frontmatter && <FrontmatterBar fm={file.frontmatter} />}
@@ -674,13 +674,13 @@ export default function VaultPage() {
     : `Search ${meta.title.toLowerCase()}...`;
 
   return (
-    <div className="h-full overflow-hidden bg-bg relative">
+    <div className="h-full overflow-hidden relative">
       {/* Floating glass pill — tabs + search + browse, matching Work page pattern */}
       {section === 'knowledge' && (
         <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[100]">
           <div
             className="flex items-center gap-1 h-8 px-1 rounded-full border shadow-[0_2px_12px_rgba(0,0,0,0.3)]"
-            style={{ background: 'rgba(30, 26, 22, 0.60)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderColor: 'rgba(255, 245, 235, 0.06)' }}
+            style={{ background: 'var(--glass-bg)', backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', borderColor: 'var(--glass-border)' }}
           >
             {(['feed', 'pipeline'] as const).map(tab => (
               <button
@@ -761,7 +761,7 @@ export default function VaultPage() {
               ) : (
                 <div className="flex flex-col items-center justify-center py-16">
                   <Search className="w-8 h-8 text-text-quaternary opacity-20 mb-3" />
-                  <p className="text-[13px] font-serif text-text-quaternary">No results for "{searchQuery}"</p>
+                  <p className="text-[13px] text-text-quaternary">No results for "{searchQuery}"</p>
                 </div>
               )}
             </div>
@@ -793,7 +793,7 @@ export default function VaultPage() {
               ) : (
                 <div className="flex flex-col items-center justify-center py-12">
                   <SectionIcon className="w-8 h-8 text-text-quaternary opacity-15 mb-3" />
-                  <p className="text-[13px] font-serif text-text-quaternary">Loading...</p>
+                  <p className="text-[13px] text-text-quaternary">Loading...</p>
                 </div>
               )}
             </div>
@@ -814,7 +814,7 @@ export default function VaultPage() {
               {collections.length === 0 && (
                 <div className="flex flex-col items-center justify-center py-20">
                   <Library className="w-10 h-10 text-text-quaternary opacity-15 mb-4" />
-                  <p className="text-[14px] font-serif text-text-tertiary">Connecting to vault...</p>
+                  <p className="text-[14px] text-text-tertiary">Connecting to vault...</p>
                 </div>
               )}
             </div>
