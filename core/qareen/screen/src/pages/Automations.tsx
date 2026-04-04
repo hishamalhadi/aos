@@ -1,38 +1,35 @@
 import { useState, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Zap, Plus, Play, ChevronDown, ChevronRight,
-  MoreHorizontal, X, Check, Clock, AlertCircle,
+  Zap, Play, ChevronDown, ChevronRight,
+  X, Check, Clock, AlertCircle,
   Pause, Send, Loader2, Sparkles, ArrowRight,
   MessageCircle, Mail, Sheet, Rss, Webhook,
-  Calendar, Globe, Bot,
+  Calendar, Globe, History,
 } from 'lucide-react';
-import { Tag, StatusDot } from '@/components/primitives';
+import { Tag, StatusDot, type StatusDotColor } from '@/components/primitives';
 import {
   useN8nAutomations, useAutomationsHealth,
   useGenerateAutomation, useDeployAutomation,
   useActivateAutomation, useDeactivateAutomation,
+  useAutomationContext, useExecutionHistory,
   type N8nAutomation, type GenerateResult,
 } from '@/hooks/useAutomations';
 
 // ---------------------------------------------------------------------------
-// Automations — visual control surface for scheduled jobs.
-// Shows user-created automations + system crons.
+// Automations — n8n-powered workflows + system crons.
 // ---------------------------------------------------------------------------
 
-interface Automation {
+interface SystemCron {
   id: string;
   name: string;
   description: string;
-  prompt?: string;
   frequency: string;
   at?: string;
   weekday?: string;
   every?: string;
-  agent?: string;
   enabled: boolean;
-  notify?: boolean;
-  type: 'user' | 'system';
+  type: 'system';
   tier?: number;
   tier_label?: string;
   schedule_human: string;
@@ -40,19 +37,12 @@ interface Automation {
   last_run_ago?: string;
   last_status?: string | number;
   duration_ms?: number;
-  created?: string;
 }
 
-interface AutomationsData {
-  user: Automation[];
-  system: Automation[];
-  total: number;
-}
-
-function useAutomations() {
+function useSystemCrons() {
   return useQuery({
     queryKey: ['automations'],
-    queryFn: async (): Promise<AutomationsData> => {
+    queryFn: async (): Promise<{ system: SystemCron[]; total: number }> => {
       const res = await fetch('/api/automations');
       if (!res.ok) throw new Error('Failed');
       return res.json();
@@ -64,59 +54,48 @@ function useAutomations() {
 
 // ── Status helpers ──
 
-function statusColor(status: string | number | undefined): string {
+function statusColor(status: string | number | undefined): StatusDotColor {
   if (status === undefined || status === null) return 'gray';
   if (status === 'success' || status === 0) return 'green';
   if (status === 'running') return 'blue';
   return 'red';
 }
 
-function statusLabel(status: string | number | undefined): string {
-  if (status === undefined || status === null) return 'Never run';
-  if (status === 'success' || status === 0) return 'Success';
-  if (status === 'running') return 'Running';
-  if (status === 'timeout') return 'Timeout';
-  return `Error (${status})`;
-}
+// ── System cron row ──
 
-// ── Automation row ──
-
-function AutomationRow({
-  automation,
-  onToggle,
+function CronRow({
+  cron,
   onRun,
   onClick,
 }: {
-  automation: Automation;
-  onToggle: () => void;
+  cron: SystemCron;
   onRun: () => void;
   onClick: () => void;
 }) {
-  const sc = statusColor(automation.last_status);
+  const sc = statusColor(cron.last_status);
 
   return (
     <div
       onClick={onClick}
       className="flex items-center gap-3 py-3 px-1 cursor-pointer hover:bg-hover rounded-[5px] transition-colors duration-100 group"
     >
-      <StatusDot color={automation.enabled ? sc : 'gray'} size="md" />
+      <StatusDot color={cron.enabled ? sc : 'gray'} size="md" />
 
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
           <span className="text-[13px] font-[510] text-text-secondary">
-            {automation.name}
+            {cron.name}
           </span>
-          {!automation.enabled && (
+          {!cron.enabled && (
             <Tag label="Paused" color="gray" size="sm" />
           )}
         </div>
         <span className="text-[11px] text-text-quaternary block mt-0.5 truncate">
-          {automation.schedule_human}
-          {automation.last_run_ago && ` · ${automation.last_run_ago}`}
+          {cron.schedule_human}
+          {cron.last_run_ago && ` · ${cron.last_run_ago}`}
         </span>
       </div>
 
-      {/* Quick actions — visible on hover */}
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity duration-100">
         <button
           onClick={(e) => { e.stopPropagation(); onRun(); }}
@@ -125,239 +104,6 @@ function AutomationRow({
         >
           <Play className="w-3.5 h-3.5" />
         </button>
-        <button
-          onClick={(e) => { e.stopPropagation(); onToggle(); }}
-          title={automation.enabled ? 'Pause' : 'Resume'}
-          className="w-7 h-7 flex items-center justify-center rounded-[5px] text-text-quaternary hover:text-text-tertiary hover:bg-bg-tertiary transition-colors cursor-pointer"
-        >
-          {automation.enabled
-            ? <span className="w-3 h-3 rounded-sm border-2 border-current" />
-            : <Play className="w-3 h-3" />
-          }
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// ── Detail panel ──
-
-function DetailPanel({
-  automation,
-  onClose,
-  onRun,
-  onToggle,
-}: {
-  automation: Automation;
-  onClose: () => void;
-  onRun: () => void;
-  onToggle: () => void;
-}) {
-  const sc = statusColor(automation.last_status);
-
-  return (
-    <div className="border-t border-border mt-2 pt-4 pb-2 animate-[fadeIn_150ms_ease-out]">
-      {/* Header */}
-      <div className="flex items-start justify-between mb-4">
-        <div>
-          <h2 className="text-[18px] font-[600] text-text">{automation.name}</h2>
-          <div className="flex items-center gap-2 mt-1">
-            <Tag
-              label={automation.enabled ? 'Active' : 'Paused'}
-              color={automation.enabled ? 'green' : 'gray'}
-              size="sm"
-            />
-            <span className="text-[11px] text-text-quaternary">
-              {automation.last_run_ago ? `Last run ${automation.last_run_ago}` : 'Never run'}
-            </span>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={onRun}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-[5px] text-[12px] font-[510] bg-bg-tertiary border border-border text-text-secondary hover:bg-bg-quaternary transition-colors cursor-pointer"
-          >
-            <Play className="w-3 h-3" /> Run now
-          </button>
-          <button
-            onClick={onClose}
-            className="w-7 h-7 flex items-center justify-center rounded-[5px] text-text-quaternary hover:text-text-tertiary hover:bg-hover transition-colors cursor-pointer"
-          >
-            <X className="w-3.5 h-3.5" />
-          </button>
-        </div>
-      </div>
-
-      {/* Content grid */}
-      <div className="grid grid-cols-2 gap-6">
-        <div>
-          <span className="text-[11px] font-[510] text-text-quaternary block mb-1">Description</span>
-          <p className="text-[13px] text-text-secondary">
-            {automation.description || 'No description'}
-          </p>
-        </div>
-        {automation.prompt && (
-          <div>
-            <span className="text-[11px] font-[510] text-text-quaternary block mb-1">Instructions</span>
-            <p className="text-[13px] text-text-tertiary bg-bg-tertiary rounded-[5px] px-2.5 py-2">
-              {automation.prompt}
-            </p>
-          </div>
-        )}
-      </div>
-
-      {/* Schedule + status */}
-      <div className="mt-4 flex items-center gap-4">
-        <div className="flex items-center gap-2">
-          <Clock className="w-3.5 h-3.5 text-text-quaternary" />
-          <span className="text-[12px] text-text-tertiary">{automation.schedule_human}</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <StatusDot color={sc} size="sm" />
-          <span className="text-[12px] text-text-tertiary">{statusLabel(automation.last_status)}</span>
-        </div>
-        {automation.duration_ms != null && (
-          <span className="text-[11px] text-text-quaternary">
-            {automation.duration_ms < 1000 ? `${automation.duration_ms}ms` : `${(automation.duration_ms / 1000).toFixed(1)}s`}
-          </span>
-        )}
-      </div>
-
-      {/* Toggle */}
-      <div className="mt-4">
-        <button
-          onClick={onToggle}
-          className="text-[12px] font-[510] text-text-quaternary hover:text-text-tertiary cursor-pointer transition-colors"
-        >
-          {automation.enabled ? 'Pause this automation' : 'Resume this automation'}
-        </button>
-      </div>
-
-      <style>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(-4px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-      `}</style>
-    </div>
-  );
-}
-
-// ── Create modal ──
-
-function CreateModal({ onClose }: { onClose: () => void }) {
-  const qc = useQueryClient();
-  const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [prompt, setPrompt] = useState('');
-  const [frequency, setFrequency] = useState('daily');
-  const [at, setAt] = useState('07:00');
-
-  const create = useMutation({
-    mutationFn: async () => {
-      const res = await fetch('/api/automations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, description, prompt, frequency, at }),
-      });
-      if (!res.ok) throw new Error('Failed');
-      return res.json();
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['automations'] });
-      onClose();
-    },
-  });
-
-  return (
-    <div className="fixed inset-0 z-[600] flex items-center justify-center font-sans">
-      <div className="absolute inset-0 bg-bg/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-[480px] max-w-[90vw] bg-bg-panel border border-border rounded-[10px] shadow-[0_8px_32px_rgba(0,0,0,0.5)] p-5">
-        <div className="flex items-center justify-between mb-5">
-          <h2 className="text-[16px] font-[600] text-text">New automation</h2>
-          <button onClick={onClose} className="p-1 rounded-[3px] text-text-quaternary hover:text-text-tertiary cursor-pointer">
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="space-y-4">
-          <div>
-            <label className="text-[11px] font-[510] text-text-quaternary block mb-1.5">Name</label>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Daily email digest"
-              className="w-full h-8 px-2.5 rounded-[5px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary hover:border-border-secondary focus:outline-none focus:border-accent/60"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] font-[510] text-text-quaternary block mb-1.5">Description</label>
-            <input
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What does this automation do?"
-              className="w-full h-8 px-2.5 rounded-[5px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary hover:border-border-secondary focus:outline-none focus:border-accent/60"
-            />
-          </div>
-
-          <div>
-            <label className="text-[11px] font-[510] text-text-quaternary block mb-1.5">Instructions</label>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              placeholder="What should the agent do? e.g. Check my Google Calendar for today's meetings and summarize my unread emails."
-              rows={3}
-              className="w-full px-2.5 py-2 rounded-[5px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary hover:border-border-secondary focus:outline-none focus:border-accent/60 resize-none"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-[11px] font-[510] text-text-quaternary block mb-1.5">Frequency</label>
-              <select
-                value={frequency}
-                onChange={(e) => setFrequency(e.target.value)}
-                className="w-full h-8 px-2.5 rounded-[5px] bg-bg-tertiary border border-border text-[13px] text-text-secondary cursor-pointer hover:border-border-secondary focus:outline-none focus:border-accent/60 appearance-none"
-                style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%236B6560' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")`, backgroundRepeat: 'no-repeat', backgroundPosition: 'right 8px center' }}
-              >
-                <option value="manual">Manual</option>
-                <option value="hourly">Hourly</option>
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
-                <option value="monthly">Monthly</option>
-              </select>
-            </div>
-            {frequency !== 'manual' && (
-              <div>
-                <label className="text-[11px] font-[510] text-text-quaternary block mb-1.5">Time</label>
-                <input
-                  type="text"
-                  value={at}
-                  onChange={(e) => setAt(e.target.value)}
-                  placeholder="07:00"
-                  className="w-full h-8 px-2.5 rounded-[5px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary hover:border-border-secondary focus:outline-none focus:border-accent/60"
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="flex justify-end gap-2 mt-5">
-          <button
-            onClick={onClose}
-            className="px-3 py-1.5 rounded-[5px] text-[12px] font-[510] text-text-tertiary hover:text-text-secondary hover:bg-hover transition-colors cursor-pointer"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={() => create.mutate()}
-            disabled={!name.trim() || create.isPending}
-            className="px-3 py-1.5 rounded-[5px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-40"
-          >
-            {create.isPending ? 'Creating...' : 'Create'}
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -366,19 +112,14 @@ function CreateModal({ onClose }: { onClose: () => void }) {
 // ── System automations group (collapsible) ──
 
 function SystemGroup({
-  automations,
-  onToggle,
+  crons,
   onRun,
-  onSelect,
-  selectedId,
 }: {
-  automations: Automation[];
-  onToggle: (id: string, enabled: boolean) => void;
+  crons: SystemCron[];
   onRun: (id: string) => void;
-  onSelect: (a: Automation) => void;
-  selectedId: string | null;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const Chevron = expanded ? ChevronDown : ChevronRight;
 
   return (
@@ -391,27 +132,17 @@ function SystemGroup({
         <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em]">
           System
         </span>
-        <span className="text-[10px] text-text-quaternary">{automations.length}</span>
+        <span className="text-[10px] text-text-quaternary">{crons.length}</span>
       </button>
       {expanded && (
         <div>
-          {automations.map((a) => (
-            <div key={a.id}>
-              <AutomationRow
-                automation={a}
-                onToggle={() => onToggle(a.id, !a.enabled)}
-                onRun={() => onRun(a.id)}
-                onClick={() => onSelect(a)}
-              />
-              {selectedId === a.id && (
-                <DetailPanel
-                  automation={a}
-                  onClose={() => onSelect(a)}
-                  onRun={() => onRun(a.id)}
-                  onToggle={() => onToggle(a.id, !a.enabled)}
-                />
-              )}
-            </div>
+          {crons.map((c) => (
+            <CronRow
+              key={c.id}
+              cron={c}
+              onRun={() => onRun(c.id)}
+              onClick={() => setSelectedId(prev => prev === c.id ? null : c.id)}
+            />
           ))}
         </div>
       )}
@@ -427,6 +158,9 @@ const RECIPE_ICONS: Record<string, { trigger: typeof Clock; action: typeof Zap; 
   rss_to_webhook: { trigger: Rss, action: Globe, triggerLabel: 'RSS Feed', actionLabel: 'Webhook' },
   webhook_relay: { trigger: Webhook, action: Globe, triggerLabel: 'Webhook', actionLabel: 'Forward' },
   form_to_sheets: { trigger: Webhook, action: Sheet, triggerLabel: 'Form', actionLabel: 'Sheets' },
+  email_digest: { trigger: Clock, action: Mail, triggerLabel: 'Schedule', actionLabel: 'Gmail' },
+  calendar_to_telegram: { trigger: Calendar, action: MessageCircle, triggerLabel: 'Calendar', actionLabel: 'Telegram' },
+  shopify_orders: { trigger: Clock, action: MessageCircle, triggerLabel: 'Shopify', actionLabel: 'Telegram' },
 };
 
 function cronToHuman(cron: string): string {
@@ -449,6 +183,57 @@ function cronToHuman(cron: string): string {
 
 // ── n8n Automation card ──
 
+function ExecutionHistoryPanel({ automationId }: { automationId: string }) {
+  const { data, isLoading } = useExecutionHistory(automationId);
+  const executions = data?.executions ?? [];
+
+  if (isLoading) {
+    return (
+      <div className="py-3 text-center">
+        <Loader2 className="w-3.5 h-3.5 animate-spin text-text-quaternary inline-block" />
+      </div>
+    );
+  }
+
+  if (executions.length === 0) {
+    return (
+      <div className="py-3 text-center">
+        <span className="text-[11px] text-text-quaternary">No executions yet</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {executions.slice(0, 10).map((exec: Record<string, unknown>) => {
+        const status = exec.status as string || 'unknown';
+        const finished = exec.stoppedAt as string || exec.startedAt as string;
+        const sc: StatusDotColor = status === 'success' ? 'green' : status === 'error' ? 'red' : status === 'running' ? 'blue' : 'gray';
+        const duration = exec.stoppedAt && exec.startedAt
+          ? Math.round((new Date(exec.stoppedAt as string).getTime() - new Date(exec.startedAt as string).getTime()) / 1000)
+          : null;
+
+        return (
+          <div key={exec.id as string} className="flex items-center gap-2.5 py-1.5 px-2 rounded-[5px] hover:bg-hover transition-colors">
+            <StatusDot color={sc} size="sm" />
+            <span className="text-[11px] text-text-secondary flex-1 capitalize">{status}</span>
+            {duration !== null && (
+              <span className="text-[10px] text-text-quaternary">{duration}s</span>
+            )}
+            {finished && (
+              <span className="text-[10px] text-text-quaternary">
+                {new Date(finished).toLocaleString(undefined, {
+                  month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+                })}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function N8nAutomationCard({
   automation,
   onActivate,
@@ -458,6 +243,7 @@ function N8nAutomationCard({
   onActivate: () => void;
   onDeactivate: () => void;
 }) {
+  const [showHistory, setShowHistory] = useState(false);
   const statusColors: Record<string, string> = {
     active: 'green', draft: 'gray', paused: 'yellow', error: 'red', archived: 'gray',
   };
@@ -482,6 +268,16 @@ function N8nAutomationCard({
           <Tag label={automation.status} color={sc as any} size="sm" />
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={() => setShowHistory(!showHistory)}
+            className={`flex items-center gap-1 px-2 py-1 rounded-[5px] text-[11px] font-[510] transition-colors cursor-pointer ${
+              showHistory
+                ? 'text-accent bg-accent/10'
+                : 'text-text-quaternary hover:text-text-tertiary hover:bg-bg-tertiary'
+            }`}
+          >
+            <History className="w-3 h-3" /> Runs
+          </button>
           {automation.status === 'active' ? (
             <button
               onClick={onDeactivate}
@@ -545,6 +341,14 @@ function N8nAutomationCard({
           <span className="text-[10px] text-text-quaternary">No runs yet</span>
         )}
       </div>
+
+      {/* Execution history (expandable) */}
+      {showHistory && (
+        <div className="mt-3 pt-2.5 border-t border-border animate-[fadeIn_150ms_ease-out]">
+          <span className="text-[11px] font-[510] text-text-quaternary block mb-2">Recent runs</span>
+          <ExecutionHistoryPanel automationId={automation.id} />
+        </div>
+      )}
     </div>
   );
 }
@@ -555,14 +359,19 @@ function GenerateFlow({ onClose }: { onClose: () => void }) {
   const [input, setInput] = useState('');
   const generate = useGenerateAutomation();
   const deploy = useDeployAutomation();
+  const { data: ctx } = useAutomationContext();
   const [preview, setPreview] = useState<GenerateResult | null>(null);
 
   const handleGenerate = () => {
     if (!input.trim()) return;
+    const context: Record<string, unknown> = {};
+    if (ctx?.telegram_chat_id) context.telegram_chat_id = ctx.telegram_chat_id;
+    if (ctx?.timezone) context.timezone = ctx.timezone;
+
     generate.mutate({
       description: input,
-      connected_accounts: ['telegram', 'google_workspace'],
-      context: { telegram_chat_id: '6679471412' },
+      connected_accounts: ctx?.connected_accounts ?? [],
+      context,
     }, {
       onSuccess: (result) => setPreview(result),
     });
@@ -684,25 +493,13 @@ function GenerateFlow({ onClose }: { onClose: () => void }) {
 // ── Main page ──
 
 export default function AutomationsPage() {
-  const { data, isLoading } = useAutomations();
+  const { data: cronsData, isLoading } = useSystemCrons();
   const { data: n8nData } = useN8nAutomations();
   const { data: healthData } = useAutomationsHealth();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
   const activate = useActivateAutomation();
   const deactivate = useDeactivateAutomation();
-
-  const toggleMutation = useMutation({
-    mutationFn: async ({ id, enabled }: { id: string; enabled: boolean }) => {
-      await fetch(`/api/automations/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled }),
-      });
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['automations'] }),
-  });
 
   const runMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -712,20 +509,11 @@ export default function AutomationsPage() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['automations'] }),
   });
 
-  const handleToggle = useCallback((id: string, enabled: boolean) => {
-    toggleMutation.mutate({ id, enabled });
-  }, [toggleMutation]);
-
   const handleRun = useCallback((id: string) => {
     runMutation.mutate(id);
   }, [runMutation]);
 
-  const handleSelect = useCallback((a: Automation) => {
-    setSelectedId((prev) => prev === a.id ? null : a.id);
-  }, []);
-
-  const userAutomations = data?.user ?? [];
-  const systemAutomations = data?.system ?? [];
+  const systemCrons = cronsData?.system ?? [];
   const n8nAutomations = n8nData?.automations ?? [];
   const n8nHealthy = healthData?.status === 'ok';
 
@@ -778,35 +566,8 @@ export default function AutomationsPage() {
           </div>
         )}
 
-        {/* User automations (legacy YAML-based) */}
-        {userAutomations.length > 0 && (
-          <div className="mb-6">
-            <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2">
-              Agent automations
-            </span>
-            {userAutomations.map((a) => (
-              <div key={a.id}>
-                <AutomationRow
-                  automation={a}
-                  onToggle={() => handleToggle(a.id, !a.enabled)}
-                  onRun={() => handleRun(a.id)}
-                  onClick={() => handleSelect(a)}
-                />
-                {selectedId === a.id && (
-                  <DetailPanel
-                    automation={a}
-                    onClose={() => handleSelect(a)}
-                    onRun={() => handleRun(a.id)}
-                    onToggle={() => handleToggle(a.id, !a.enabled)}
-                  />
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
         {/* Empty state */}
-        {n8nAutomations.length === 0 && userAutomations.length === 0 && !isLoading && (
+        {n8nAutomations.length === 0 && !isLoading && (
           <div className="py-12">
             <p className="text-[13px] text-text-quaternary mb-4">
               No automations yet. Describe what you want automated and it'll run on your Mac Mini 24/7.
@@ -820,19 +581,13 @@ export default function AutomationsPage() {
           </div>
         )}
 
-        {/* System automations */}
+        {/* System crons */}
         {isLoading ? (
           <div className="mt-8 text-center">
             <span className="text-[12px] text-text-quaternary">Loading automations...</span>
           </div>
         ) : (
-          <SystemGroup
-            automations={systemAutomations}
-            onToggle={handleToggle}
-            onRun={handleRun}
-            onSelect={handleSelect}
-            selectedId={selectedId}
-          />
+          <SystemGroup crons={systemCrons} onRun={handleRun} />
         )}
       </div>
 
