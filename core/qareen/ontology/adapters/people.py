@@ -299,6 +299,72 @@ class PeopleAdapter(Adapter):
             ))
         return results
 
+    # -- Interactions & Relationships ----------------------------------------
+
+    def get_interactions(
+        self,
+        person_id: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Get recent interactions for a person from the interactions table."""
+        rows = self._people_conn.execute(
+            """SELECT id, person_id, occurred_at, channel, direction,
+                      msg_count, subject, summary
+               FROM interactions
+               WHERE person_id = ?
+               ORDER BY occurred_at DESC
+               LIMIT ?""",
+            (person_id, limit),
+        ).fetchall()
+
+        result = []
+        for r in rows:
+            ts = _epoch_to_dt(r.get("occurred_at"))
+            result.append({
+                "id": r["id"],
+                "channel": r.get("channel", "unknown"),
+                "direction": r.get("direction", "inbound"),
+                "summary": r.get("summary") or r.get("subject"),
+                "timestamp": ts.isoformat() if ts else None,
+                "message_count": r.get("msg_count", 1) or 1,
+            })
+        return result
+
+    def get_relationships(
+        self,
+        person_id: str,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Get relationships for a person."""
+        rows = self._people_conn.execute(
+            """SELECT person_a_id, person_b_id, type, subtype, strength,
+                      context, notes
+               FROM relationships
+               WHERE person_a_id = ? OR person_b_id = ?
+               LIMIT ?""",
+            (person_id, person_id, limit),
+        ).fetchall()
+
+        result = []
+        for r in rows:
+            # Determine which side is the "other" person
+            other_id = r["person_b_id"] if r["person_a_id"] == person_id else r["person_a_id"]
+            # Look up name
+            other = self._people_conn.execute(
+                "SELECT canonical_name FROM people WHERE id = ?", (other_id,)
+            ).fetchone()
+            other_name = other["canonical_name"] if other else None
+
+            result.append({
+                "link_type": r.get("subtype") or r.get("type", "knows"),
+                "target_type": "person",
+                "target_id": other_id,
+                "target_name": other_name,
+                "strength": r.get("strength"),
+                "context": r.get("context"),
+            })
+        return result
+
     # -- Links ---------------------------------------------------------------
 
     def get_links(
@@ -498,6 +564,17 @@ class PeopleAdapter(Adapter):
         if privacy >= 3:
             return person
 
+        # -- Aliases (from people table: nickname, display_name if different) --
+        name_aliases: list[str] = []
+        nickname = row.get("nickname")
+        display = row.get("display_name")
+        canonical = row.get("canonical_name") or ""
+        if nickname and nickname.lower() != canonical.lower():
+            name_aliases.append(nickname)
+        if display and display.lower() != canonical.lower() and display not in name_aliases:
+            name_aliases.append(display)
+        person.aliases = name_aliases
+
         # -- Identifiers (pick primary, else first of each type) -------------
         idents = self._people_conn.execute(
             """SELECT type, value, is_primary FROM person_identifiers
@@ -506,6 +583,7 @@ class PeopleAdapter(Adapter):
             (pid,),
         ).fetchall()
 
+        channels: dict[str, str] = {}
         seen_types: set[str] = set()
         for ident in idents:
             itype = ident["type"]
@@ -515,10 +593,17 @@ class PeopleAdapter(Adapter):
             val = ident["value"]
             if itype == "email":
                 person.email = val
+                channels["email"] = val
             elif itype == "phone":
                 person.phone = val
+                channels["phone"] = val
             elif itype == "wa_jid":
                 person.whatsapp_jid = val
+                channels["whatsapp"] = val
+            elif itype == "telegram_id":
+                person.telegram_id = val
+                channels["telegram"] = val
+        person.channels = channels
 
         # -- Contact metadata ------------------------------------------------
         meta = self._people_conn.execute(
@@ -530,6 +615,7 @@ class PeopleAdapter(Adapter):
             person.city = meta.get("city") or None
             person.how_met = meta.get("how_met") or None
             person.birthday = meta.get("birthday") or None
+            person.notes = meta.get("notes") or None
 
         # -- Relationship state ----------------------------------------------
         rstate = self._people_conn.execute(
