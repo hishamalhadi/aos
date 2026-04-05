@@ -11,13 +11,58 @@ Usage:
 import argparse
 import asyncio
 import json
+import re
 import sys
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 
+_TWITTER_RE = re.compile(r'https?://(?:x\.com|twitter\.com)/(\w+)/status/(\d+)')
+
+
+async def _fetch_tweet_cli(url: str, output_format: str) -> bool:
+    """Handle X/Twitter URLs via FxTwitter API. Returns True if handled."""
+    m = _TWITTER_RE.match(url)
+    if not m:
+        return False
+    user, tweet_id = m.groups()
+    import httpx
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AOS-Crawler/1.0"}) as client:
+        resp = await client.get(f"https://api.fxtwitter.com/{user}/status/{tweet_id}")
+    if resp.status_code != 200:
+        print(json.dumps({"error": f"FxTwitter API returned {resp.status_code}"}))
+        return True
+    data = resp.json()
+    tweet = data.get("tweet", {})
+    author = tweet.get("author", {})
+
+    if output_format == "json":
+        print(json.dumps({
+            "url": tweet.get("url", url),
+            "author": author.get("name", ""),
+            "handle": author.get("screen_name", ""),
+            "text": tweet.get("text", ""),
+            "created_at": tweet.get("created_at", ""),
+            "likes": tweet.get("likes", 0),
+            "retweets": tweet.get("retweets", 0),
+            "views": tweet.get("views", 0),
+            "bookmarks": tweet.get("bookmarks", 0),
+            "is_note_tweet": tweet.get("is_note_tweet", False),
+        }, indent=2, ensure_ascii=False))
+    else:
+        print(f"# {author.get('name', '')} (@{author.get('screen_name', '')})")
+        print(f"\n*{tweet.get('created_at', '')}*\n")
+        print(tweet.get("text", ""))
+        print(f"\n---")
+        print(f"Likes: {tweet.get('likes', 0):,} | Retweets: {tweet.get('retweets', 0):,} | Views: {tweet.get('views', 0):,}")
+    return True
+
 
 async def crawl_single(url: str, output_format: str = "markdown", schema_name: str = None):
     """Crawl a single page."""
+    # Special-case: X/Twitter
+    if not schema_name and await _fetch_tweet_cli(url, output_format):
+        return
+
     browser_config = BrowserConfig(headless=True, verbose=False)
 
     config_kwargs = {"word_count_threshold": 10}

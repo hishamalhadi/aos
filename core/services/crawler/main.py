@@ -4,10 +4,73 @@ import setproctitle; setproctitle.setproctitle("aos-crawler")
 
 import asyncio
 import json
+import re
 from typing import Optional
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from schemas import SchemaStore
+
+# Patterns for sites that need special handling (login walls, anti-bot)
+_TWITTER_RE = re.compile(r'https?://(?:x\.com|twitter\.com)/(\w+)/status/(\d+)')
+
+
+async def _fetch_tweet(url: str) -> dict | None:
+    """Extract tweet via FxTwitter API (free, no auth, full text + metadata)."""
+    m = _TWITTER_RE.match(url)
+    if not m:
+        return None
+    user, tweet_id = m.groups()
+    async with httpx.AsyncClient(timeout=15, headers={"User-Agent": "AOS-Crawler/1.0"}) as client:
+        resp = await client.get(f"https://api.fxtwitter.com/{user}/status/{tweet_id}")
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+    tweet = data.get("tweet", {})
+    author = tweet.get("author", {})
+    content = tweet.get("text", "")
+
+    # Build markdown output
+    md_lines = [
+        f"# {author.get('name', '')} (@{author.get('screen_name', '')})",
+        f"",
+        f"*{tweet.get('created_at', '')}*",
+        f"",
+        content,
+        f"",
+        f"---",
+        f"Likes: {tweet.get('likes', 0):,} | "
+        f"Retweets: {tweet.get('retweets', 0):,} | "
+        f"Views: {tweet.get('views', 0):,} | "
+        f"Bookmarks: {tweet.get('bookmarks', 0):,}",
+    ]
+
+    # Include media if present
+    media = tweet.get("media", {})
+    if media and media.get("all"):
+        md_lines.append("")
+        for item in media["all"]:
+            if item.get("type") == "photo":
+                md_lines.append(f"![image]({item.get('url', '')})")
+            elif item.get("type") == "video":
+                md_lines.append(f"[Video]({item.get('url', '')})")
+
+    return {
+        "url": tweet.get("url", url),
+        "status": 200,
+        "content": "\n".join(md_lines),
+        "metadata": {
+            "title": f"{author.get('name', '')} on X",
+            "author": author.get("name", ""),
+            "author_handle": author.get("screen_name", ""),
+            "likes": tweet.get("likes", 0),
+            "retweets": tweet.get("retweets", 0),
+            "views": tweet.get("views", 0),
+            "bookmarks": tweet.get("bookmarks", 0),
+            "is_note_tweet": tweet.get("is_note_tweet", False),
+            "created_at": tweet.get("created_at", ""),
+        },
+    }
 
 mcp = FastMCP("aos-crawler", log_level="WARNING")
 schema_store = SchemaStore()
@@ -32,10 +95,17 @@ async def _get_crawler():
 async def crawl_page(url: str, format: str = "markdown") -> str:
     """Crawl a single web page and return clean content.
 
+    Handles special sites automatically (X/Twitter via API, etc.).
+
     Args:
         url: The URL to crawl
         format: Output format — "markdown" (default) or "html"
     """
+    # Special-case: X/Twitter (login wall blocks normal crawling)
+    tweet_result = await _fetch_tweet(url)
+    if tweet_result is not None:
+        return json.dumps(tweet_result, ensure_ascii=False)
+
     from crawl4ai import CrawlerRunConfig
 
     crawler = await _get_crawler()
