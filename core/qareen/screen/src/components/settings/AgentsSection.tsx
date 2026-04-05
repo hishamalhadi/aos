@@ -1,5 +1,5 @@
 import { Bot } from 'lucide-react';
-import { useAgents, type AgentMeta } from '@/hooks/useAgents';
+import { useAgents, type Agent } from '@/hooks/useAgents';
 import { Tag } from '@/components/primitives';
 import { SettingCard, SettingRow, LoadingRows } from './shared';
 import type { SettingsSection } from './types';
@@ -27,10 +27,10 @@ function toolsSummary(tools: string | string[]): string {
   return String(tools);
 }
 
-function AgentRow({ agent }: { agent: AgentMeta }) {
-  const isSystem = SYSTEM_AGENTS.has(agent.name.toLowerCase());
-  const trustLevel = (agent as any).trust_level as number | undefined;
-  const color = (agent as any).color as string | undefined;
+function AgentRow({ agent }: { agent: Agent }) {
+  const isSystem = agent.is_system || SYSTEM_AGENTS.has(agent.name.toLowerCase());
+  const trustLevel = agent.default_trust;
+  const color = agent.color || undefined;
 
   return (
     <div className="flex items-center justify-between py-3 min-h-[44px]">

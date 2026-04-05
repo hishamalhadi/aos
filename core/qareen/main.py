@@ -701,6 +701,7 @@ _api_routers = [
     ("qareen.api.work", "work"),
     ("qareen.api.config", "config"),
     ("qareen.api.agents", "agents"),
+    ("qareen.api.skills", "skills"),
     ("qareen.api.services", "services"),
     ("qareen.api.people", "people"),
     ("qareen.api.vault", "vault"),
@@ -712,6 +713,8 @@ _api_routers = [
     ("qareen.api.meetings", "meetings"),
     ("qareen.api.days", "days"),
     ("qareen.api.connectors", "connectors"),
+    ("qareen.api.architect", "architect"),
+    ("qareen.api.flow_builder", "flow_builder"),
 ]
 
 for module_path, name in _api_routers:

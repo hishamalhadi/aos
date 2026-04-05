@@ -356,14 +356,21 @@ class AgentResponse(BaseModel):
 
     id: str = Field(..., description="Agent identifier", examples=["chief"])
     name: str = Field(..., description="Display name")
+    role: str = Field("", description="Agent role title")
     domain: str = Field("", description="Agent's domain of expertise")
     description: str = Field("", description="What this agent does")
     model: str = Field("sonnet", description="LLM model used")
+    color: str = Field("", description="Brand color hex")
+    initials: str = Field("", description="Two-letter display initials")
 
     tools: list[str] = Field(default_factory=list, description="Available tools")
     skills: list[str] = Field(default_factory=list, description="Available skills")
+    mcp_servers: list[str] = Field(default_factory=list, description="Connected MCP servers")
 
     default_trust: TrustLevel = Field(TrustLevel.SURFACE, description="Default trust level")
+    scope: str = Field("global", description="global or project")
+    reports_to: str | None = Field(None, description="Parent agent ID in hierarchy")
+    source: str = Field("catalog", description="system, catalog, or community")
 
     is_system: bool = Field(False, description="System agent (chief, steward, advisor)")
     is_active: bool = Field(True, description="Whether agent is active")
@@ -408,6 +415,7 @@ class SkillResponse(BaseModel):
     name: str = Field(..., description="Skill display name")
     description: str = Field("", description="What this skill does")
     triggers: list[str] = Field(default_factory=list, description="Trigger phrases")
+    category: str = Field("domain", description="core, domain, workflow, or integration")
     is_active: bool = Field(True, description="Whether skill is enabled")
     source_path: str | None = Field(None, description="Path to SKILL.md")
 
