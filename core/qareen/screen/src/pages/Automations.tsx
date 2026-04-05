@@ -270,6 +270,58 @@ function cronToHuman(cron: string): string {
   return `${time}`;
 }
 
+// ── Node execution result type ──
+
+interface NodeResult {
+  node: string;
+  status: 'success' | 'error';
+  duration_ms: number;
+  items: number;
+  error: string | null;
+}
+
+// ── Run result panel — shows per-node status after a run ──
+
+function RunResultPanel({ results, overallStatus, error }: {
+  results: NodeResult[];
+  overallStatus: string;
+  error: string | null;
+}) {
+  return (
+    <div className="space-y-1.5">
+      {results.map((r, i) => (
+        <div key={i} className="flex items-center gap-2.5 py-1.5 px-2 rounded-[5px] bg-bg-tertiary">
+          <div className={`w-5 h-5 rounded-full flex items-center justify-center flex-shrink-0 ${
+            r.status === 'success' ? 'bg-green-500/20' : 'bg-red-500/20'
+          }`}>
+            {r.status === 'success'
+              ? <Check className="w-3 h-3 text-green-400" />
+              : <AlertCircle className="w-3 h-3 text-red-400" />
+            }
+          </div>
+          <div className="flex-1 min-w-0">
+            <span className="text-[12px] font-[510] text-text-secondary">{r.node}</span>
+            {r.error && (
+              <p className="text-[10px] text-red-400 mt-0.5 truncate">{r.error}</p>
+            )}
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            {r.items > 0 && (
+              <span className="text-[10px] text-text-quaternary">{r.items} item{r.items !== 1 ? 's' : ''}</span>
+            )}
+            <span className="text-[10px] text-text-quaternary">{r.duration_ms}ms</span>
+          </div>
+        </div>
+      ))}
+      {error && overallStatus === 'error' && (
+        <div className="mt-1.5 p-2 rounded-[5px] bg-red-500/10 border border-red-500/15">
+          <p className="text-[11px] text-red-400">{error}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── n8n Automation card ──
 
 function ExecutionHistoryPanel({ automationId }: { automationId: string }) {
@@ -335,6 +387,24 @@ function N8nAutomationCard({
   onView: () => void;
 }) {
   const [showHistory, setShowHistory] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [runResult, setRunResult] = useState<{ status: string; node_results: NodeResult[]; error: string | null } | null>(null);
+  const qc = useQueryClient();
+
+  const handleRunNow = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsRunning(true);
+    setRunResult(null);
+    try {
+      const res = await fetch(`/api/automations/${automation.id}/run`, { method: 'POST' });
+      const data = await res.json();
+      setRunResult(data);
+      qc.invalidateQueries({ queryKey: ['n8n-automations'] });
+    } catch {
+      setRunResult({ status: 'error', node_results: [], error: 'Request failed' });
+    }
+    setIsRunning(false);
+  };
   const statusColors: Record<string, string> = {
     active: 'green', draft: 'gray', paused: 'yellow', error: 'red', archived: 'gray',
   };
@@ -361,7 +431,15 @@ function N8nAutomationCard({
         </div>
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
-            onClick={() => setShowHistory(!showHistory)}
+            onClick={(e) => { e.stopPropagation(); handleRunNow(e); }}
+            disabled={isRunning}
+            className="flex items-center gap-1 px-2 py-1 rounded-[5px] text-[11px] font-[510] text-text-quaternary hover:text-accent hover:bg-bg-tertiary transition-colors cursor-pointer disabled:opacity-40"
+          >
+            {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+            {isRunning ? 'Running...' : 'Run now'}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowHistory(!showHistory); }}
             className={`flex items-center gap-1 px-2 py-1 rounded-[5px] text-[11px] font-[510] transition-colors cursor-pointer ${
               showHistory
                 ? 'text-accent bg-accent/10'
@@ -372,14 +450,14 @@ function N8nAutomationCard({
           </button>
           {automation.status === 'active' ? (
             <button
-              onClick={onDeactivate}
+              onClick={(e) => { e.stopPropagation(); onDeactivate(); }}
               className="flex items-center gap-1 px-2 py-1 rounded-[5px] text-[11px] font-[510] text-text-quaternary hover:text-yellow-400 hover:bg-bg-tertiary transition-colors cursor-pointer"
             >
               <Pause className="w-3 h-3" /> Pause
             </button>
           ) : (
             <button
-              onClick={onActivate}
+              onClick={(e) => { e.stopPropagation(); onActivate(); }}
               className="flex items-center gap-1 px-2 py-1 rounded-[5px] text-[11px] font-[510] text-text-quaternary hover:text-green-400 hover:bg-bg-tertiary transition-colors cursor-pointer"
             >
               <Play className="w-3 h-3" /> Activate
@@ -432,10 +510,48 @@ function N8nAutomationCard({
         {automation.run_count === 0 && !automation.error_message && (
           <span className="text-[10px] text-text-quaternary">No runs yet</span>
         )}
+        <button
+          onClick={(e) => { e.stopPropagation(); handleRunNow(e); }}
+          disabled={isRunning}
+          className="ml-auto flex items-center gap-1 px-2.5 py-1 rounded-[5px] text-[11px] font-[510] text-text-quaternary hover:text-accent hover:bg-bg-tertiary transition-colors cursor-pointer disabled:opacity-40"
+        >
+          {isRunning ? <Loader2 className="w-3 h-3 animate-spin" /> : <Play className="w-3 h-3" />}
+          {isRunning ? 'Running...' : 'Run now'}
+        </button>
       </div>
 
+      {/* Run result — shows per-node status after clicking "Run now" */}
+      {runResult && (
+        <div className="mt-3 pt-2.5 border-t border-border animate-[fadeIn_150ms_ease-out]">
+          <div className="flex items-center gap-2 mb-2">
+            {runResult.status === 'success'
+              ? <><Check className="w-3.5 h-3.5 text-green-400" /><span className="text-[12px] font-[510] text-green-300">All steps passed</span></>
+              : runResult.status === 'error'
+              ? <><AlertCircle className="w-3.5 h-3.5 text-red-400" /><span className="text-[12px] font-[510] text-red-300">Execution failed</span></>
+              : <><Loader2 className="w-3.5 h-3.5 text-text-quaternary animate-spin" /><span className="text-[12px] font-[510] text-text-tertiary">{runResult.status}</span></>
+            }
+            <button
+              onClick={(e) => { e.stopPropagation(); setRunResult(null); }}
+              className="ml-auto w-5 h-5 flex items-center justify-center rounded-[3px] text-text-quaternary hover:text-text-tertiary cursor-pointer"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          </div>
+          {runResult.node_results && runResult.node_results.length > 0 && (
+            <RunResultPanel
+              results={runResult.node_results}
+              overallStatus={runResult.status}
+              error={runResult.error}
+            />
+          )}
+          {runResult.error && (!runResult.node_results || runResult.node_results.length === 0) && (
+            <p className="text-[11px] text-red-400">{runResult.error}</p>
+          )}
+        </div>
+      )}
+
       {/* Execution history (expandable) */}
-      {showHistory && (
+      {showHistory && !runResult && (
         <div className="mt-3 pt-2.5 border-t border-border animate-[fadeIn_150ms_ease-out]">
           <span className="text-[11px] font-[510] text-text-quaternary block mb-2">Recent runs</span>
           <ExecutionHistoryPanel automationId={automation.id} />
