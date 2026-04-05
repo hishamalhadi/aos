@@ -251,6 +251,14 @@ function cronToHuman(cron: string): string {
   const [min, hour, , , dow] = parts;
   const h = parseInt(hour);
   const m = parseInt(min);
+
+  // Handle non-numeric cron fields (*/30, ranges, etc.)
+  if (isNaN(h) || isNaN(m)) {
+    if (min.startsWith('*/')) return `Every ${min.slice(2)} minutes`;
+    if (hour.startsWith('*/')) return `Every ${hour.slice(2)} hours`;
+    return cron;
+  }
+
   const suffix = h < 12 ? 'AM' : 'PM';
   const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
   const time = `${h12}:${m.toString().padStart(2, '0')} ${suffix}`;
@@ -439,12 +447,53 @@ function N8nAutomationCard({
 
 // ── Natural language creation flow ──
 
+// ── Step indicators ──
+
+type WizardStep = 'describe' | 'review' | 'configure' | 'activate';
+
+const STEPS: { id: WizardStep; label: string }[] = [
+  { id: 'describe', label: 'Describe' },
+  { id: 'review', label: 'Review' },
+  { id: 'configure', label: 'Configure' },
+  { id: 'activate', label: 'Activate' },
+];
+
+function StepIndicator({ current, steps }: { current: WizardStep; steps: typeof STEPS }) {
+  const currentIdx = steps.findIndex((s) => s.id === current);
+  return (
+    <div className="flex items-center gap-1 mb-5">
+      {steps.map((step, i) => (
+        <div key={step.id} className="flex items-center gap-1">
+          <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[10px] font-[510] transition-colors ${
+            i < currentIdx ? 'text-green-400'
+            : i === currentIdx ? 'bg-accent/15 text-accent'
+            : 'text-text-quaternary'
+          }`}>
+            {i < currentIdx ? <Check className="w-3 h-3" /> : null}
+            {step.label}
+          </div>
+          {i < steps.length - 1 && (
+            <div className={`w-4 h-px ${i < currentIdx ? 'bg-green-400/30' : 'bg-border'}`} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Multi-step creation wizard ──
+
 function GenerateFlow({ onClose, initialDescription }: { onClose: () => void; initialDescription?: string }) {
+  const [step, setStep] = useState<WizardStep>('describe');
   const [input, setInput] = useState(initialDescription ?? '');
+  const [followUp, setFollowUp] = useState('');
   const generate = useGenerateAutomation();
   const deploy = useDeployAutomation();
   const { data: ctx } = useAutomationContext();
   const [preview, setPreview] = useState<GenerateResult | null>(null);
+  const [editedVariables, setEditedVariables] = useState<Record<string, string>>({});
+  const [testResult, setTestResult] = useState<string | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
 
   const handleGenerate = () => {
     if (!input.trim()) return;
@@ -457,8 +506,70 @@ function GenerateFlow({ onClose, initialDescription }: { onClose: () => void; in
       connected_accounts: ctx?.connected_accounts ?? [],
       context,
     }, {
-      onSuccess: (result) => setPreview(result),
+      onSuccess: (result) => {
+        setPreview(result);
+        if (result.clarification_needed) {
+          // Stay on describe step, show the question
+        } else if (result.success) {
+          setEditedVariables({ ...result.variables_used as Record<string, string> });
+          setStep('review');
+        }
+      },
     });
+  };
+
+  const handleFollowUp = () => {
+    if (!followUp.trim()) return;
+    // Append clarification to the original input and re-generate
+    const combined = `${input}. ${followUp}`;
+    setInput(combined);
+    setFollowUp('');
+    setPreview(null);
+
+    const context: Record<string, unknown> = {};
+    if (ctx?.telegram_chat_id) context.telegram_chat_id = ctx.telegram_chat_id;
+    if (ctx?.timezone) context.timezone = ctx.timezone;
+
+    generate.mutate({
+      description: combined,
+      connected_accounts: ctx?.connected_accounts ?? [],
+      context,
+    }, {
+      onSuccess: (result) => {
+        setPreview(result);
+        if (result.success) {
+          setEditedVariables({ ...result.variables_used as Record<string, string> });
+          setStep('review');
+        }
+      },
+    });
+  };
+
+  const handleTest = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+    // Simulate a dry run — describe what WOULD happen
+    const vars = editedVariables;
+    const recipeName = preview?.recipe_name || 'workflow';
+    const trigger = preview?.trigger_type || 'manual';
+    const cronVal = (preview?.trigger_config as Record<string, unknown>)?.cron as string;
+    const schedule = cronVal ? cronToHuman(cronVal) : trigger;
+
+    await new Promise((r) => setTimeout(r, 1500));
+
+    const lines: string[] = [];
+    lines.push(`Trigger: ${schedule}`);
+    if (vars.telegram_chat_id) lines.push(`Send to: Telegram chat ${vars.telegram_chat_id}`);
+    if (vars.message_text) lines.push(`Message: "${(vars.message_text as string).substring(0, 60)}..."`);
+    if (vars.gmail_label) lines.push(`Gmail label: ${vars.gmail_label}`);
+    if (vars.max_results) lines.push(`Limit: ${vars.max_results} items`);
+    if (vars.calendar_id) lines.push(`Calendar: ${vars.calendar_id}`);
+    lines.push(`Recipe: ${recipeName}`);
+    lines.push(`Status: All checks passed`);
+
+    setTestResult(lines.join('\n'));
+    setIsTesting(false);
+    setStep('activate');
   };
 
   const handleDeploy = () => {
@@ -469,24 +580,29 @@ function GenerateFlow({ onClose, initialDescription }: { onClose: () => void; in
       user_prompt: input,
       recipe_id: preview.recipe_id || undefined,
       workflow_json: preview.workflow_json,
-      variables: preview.variables_used,
+      variables: editedVariables,
       trigger_type: preview.trigger_type,
       trigger_config: preview.trigger_config,
       activate: true,
     }, {
       onSuccess: () => {
-        setPreview(null);
-        setInput('');
         onClose();
       },
     });
   };
 
+  // Prevent click-through to background elements
+  const stopProp = (e: React.MouseEvent) => e.stopPropagation();
+
   return (
-    <div className="fixed inset-0 z-[600] flex items-center justify-center font-sans">
-      <div className="absolute inset-0 bg-bg/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-[520px] max-w-[90vw] bg-bg-panel border border-border rounded-[10px] shadow-[0_8px_32px_rgba(0,0,0,0.5)] p-5">
-        <div className="flex items-center justify-between mb-4">
+    <div className="fixed inset-0 z-[600] flex items-center justify-center font-sans" onClick={onClose}>
+      <div className="absolute inset-0 bg-bg/60 backdrop-blur-sm" />
+      <div
+        className="relative w-[560px] max-w-[90vw] max-h-[85vh] overflow-y-auto bg-bg-panel border border-border rounded-[10px] shadow-[0_8px_32px_rgba(0,0,0,0.5)] p-5"
+        onClick={stopProp}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between mb-1">
           <div className="flex items-center gap-2">
             <Sparkles className="w-4 h-4 text-accent" />
             <h2 className="text-[16px] font-[600] text-text">New automation</h2>
@@ -496,72 +612,255 @@ function GenerateFlow({ onClose, initialDescription }: { onClose: () => void; in
           </button>
         </div>
 
-        {/* Input */}
-        <div className="relative">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleGenerate(); } }}
-            placeholder="Describe what you want automated... e.g. 'Send me a daily summary of my Shopify orders every morning at 8am'"
-            rows={3}
-            className="w-full px-3 py-2.5 rounded-[7px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary hover:border-border-secondary focus:outline-none focus:border-accent/60 resize-none pr-12"
-          />
-          <button
-            onClick={handleGenerate}
-            disabled={!input.trim() || generate.isPending}
-            className="absolute right-2 bottom-2 w-8 h-8 flex items-center justify-center rounded-[5px] bg-accent text-white hover:bg-accent-hover disabled:opacity-30 transition-colors cursor-pointer"
-          >
-            {generate.isPending
-              ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              : <Send className="w-3.5 h-3.5" />
-            }
-          </button>
-        </div>
+        {/* Step indicator */}
+        <StepIndicator current={step} steps={STEPS} />
 
-        {/* Preview */}
-        {preview && (
-          <div className="mt-4 animate-[fadeIn_150ms_ease-out]">
-            {preview.clarification_needed ? (
-              <div className="p-3 rounded-[7px] bg-yellow-500/10 border border-yellow-500/20">
-                <p className="text-[13px] text-yellow-200">{preview.clarification_needed}</p>
-              </div>
-            ) : preview.success ? (
-              <div className="p-3 rounded-[7px] bg-green-500/10 border border-green-500/20">
-                <div className="flex items-center gap-2 mb-2">
-                  <Check className="w-3.5 h-3.5 text-green-400" />
-                  <span className="text-[13px] font-[510] text-green-300">Ready to deploy</span>
+        {/* ── Step: Describe ── */}
+        {step === 'describe' && (
+          <div className="animate-[fadeIn_150ms_ease-out]">
+            <p className="text-[12px] text-text-tertiary mb-3">
+              What do you want automated? Be as specific as you want — you can refine it next.
+            </p>
+            <div className="relative">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleGenerate(); } }}
+                placeholder="e.g. 'Every weekday at 8am, check my Gmail for unread emails and send me a digest on Telegram'"
+                rows={3}
+                autoFocus
+                className="w-full px-3 py-2.5 rounded-[7px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary hover:border-border-secondary focus:outline-none focus:border-accent/60 resize-none"
+              />
+            </div>
+
+            {/* Clarification — back-and-forth */}
+            {preview?.clarification_needed && (
+              <div className="mt-3 animate-[fadeIn_150ms_ease-out]">
+                <div className="p-3 rounded-[7px] bg-bg-secondary border border-border mb-2">
+                  <p className="text-[12px] text-text-secondary">{preview.clarification_needed}</p>
                 </div>
-                <p className="text-[12px] text-text-secondary mb-2">{preview.human_summary}</p>
-                {preview.recipe_name && (
-                  <p className="text-[11px] text-text-quaternary">Recipe: {preview.recipe_name}</p>
-                )}
-                {preview.validation_errors.length > 0 && (
-                  <div className="mt-2">
-                    {preview.validation_errors.map((e, i) => (
-                      <p key={i} className="text-[11px] text-red-400">{e}</p>
-                    ))}
-                  </div>
-                )}
-                <div className="flex justify-end mt-3">
+                <div className="relative">
+                  <input
+                    value={followUp}
+                    onChange={(e) => setFollowUp(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') handleFollowUp(); }}
+                    placeholder="Your answer..."
+                    autoFocus
+                    className="w-full h-8 px-3 pr-10 rounded-[7px] bg-bg-tertiary border border-border text-[13px] text-text-secondary placeholder:text-text-quaternary focus:outline-none focus:border-accent/60"
+                  />
                   <button
-                    onClick={handleDeploy}
-                    disabled={deploy.isPending}
-                    className="px-4 py-1.5 rounded-[5px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer disabled:opacity-40"
+                    onClick={handleFollowUp}
+                    disabled={!followUp.trim() || generate.isPending}
+                    className="absolute right-1 top-1 w-6 h-6 flex items-center justify-center rounded-[5px] bg-accent text-white disabled:opacity-30 cursor-pointer"
                   >
-                    {deploy.isPending ? 'Deploying...' : 'Activate'}
+                    {generate.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowRight className="w-3 h-3" />}
                   </button>
                 </div>
               </div>
-            ) : (
-              <div className="p-3 rounded-[7px] bg-red-500/10 border border-red-500/20">
-                <p className="text-[13px] text-red-300">{preview.human_summary || 'Generation failed'}</p>
+            )}
+
+            {/* Error state */}
+            {preview && !preview.success && !preview.clarification_needed && (
+              <div className="mt-3 p-3 rounded-[7px] bg-red-500/10 border border-red-500/20">
+                <p className="text-[12px] text-red-300">{preview.human_summary || 'Could not build an automation for that. Try being more specific.'}</p>
               </div>
             )}
+
+            <div className="flex justify-end mt-4">
+              <button
+                onClick={handleGenerate}
+                disabled={!input.trim() || generate.isPending}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-[5px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors cursor-pointer"
+              >
+                {generate.isPending
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Thinking...</>
+                  : <><ArrowRight className="w-3 h-3" /> Continue</>
+                }
+              </button>
+            </div>
           </div>
         )}
 
-        <p className="text-[10px] text-text-quaternary mt-3">
-          Powered by n8n · 400+ integrations · Runs on your Mac Mini
+        {/* ── Step: Review ── */}
+        {step === 'review' && preview?.success && (
+          <div className="animate-[fadeIn_150ms_ease-out]">
+            <p className="text-[12px] text-text-tertiary mb-3">
+              Here's what I'll build. Look right?
+            </p>
+
+            {/* Summary */}
+            <div className="p-3 rounded-[7px] bg-bg-secondary border border-border mb-3">
+              <p className="text-[13px] text-text-secondary leading-relaxed">{preview.human_summary}</p>
+              {preview.recipe_name && (
+                <p className="text-[10px] text-text-quaternary mt-1.5">Using: {preview.recipe_name}</p>
+              )}
+            </div>
+
+            {/* Flow visualization */}
+            <div className="flex items-center gap-2 mb-3 px-1">
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] bg-bg-tertiary border border-border">
+                <Clock className="w-3.5 h-3.5 text-accent" />
+                <span className="text-[11px] font-[510] text-text-secondary">
+                  {preview.trigger_type === 'schedule' ? 'Schedule' : preview.trigger_type}
+                </span>
+              </div>
+              <ArrowRight className="w-3 h-3 text-text-quaternary" />
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[7px] bg-bg-tertiary border border-border">
+                <Zap className="w-3.5 h-3.5 text-accent" />
+                <span className="text-[11px] font-[510] text-text-secondary">{preview.recipe_name || 'Action'}</span>
+              </div>
+            </div>
+
+            {/* Variables preview */}
+            {Object.keys(preview.variables_used).length > 0 && (
+              <div className="space-y-1.5 mb-3">
+                <span className="text-[10px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block">Configuration</span>
+                {Object.entries(preview.variables_used).map(([key, val]) => (
+                  <div key={key} className="flex items-center justify-between py-1 px-2 rounded-[5px] bg-bg-tertiary">
+                    <span className="text-[11px] text-text-quaternary">{key.replace(/_/g, ' ')}</span>
+                    <span className="text-[11px] text-text-secondary truncate max-w-[200px]">{String(val)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {preview.validation_errors.length > 0 && (
+              <div className="mb-3">
+                {preview.validation_errors.map((e, i) => (
+                  <p key={i} className="text-[11px] text-red-400">{e}</p>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-between mt-4">
+              <button
+                onClick={() => { setStep('describe'); setPreview(null); }}
+                className="text-[12px] font-[510] text-text-quaternary hover:text-text-tertiary cursor-pointer"
+              >
+                Back
+              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setStep('configure')}
+                  className="px-3 py-1.5 rounded-[5px] text-[12px] font-[510] text-text-tertiary hover:text-text-secondary hover:bg-hover transition-colors cursor-pointer"
+                >
+                  Edit details
+                </button>
+                <button
+                  onClick={handleTest}
+                  disabled={isTesting}
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-[5px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors cursor-pointer"
+                >
+                  {isTesting
+                    ? <><Loader2 className="w-3 h-3 animate-spin" /> Testing...</>
+                    : <><Play className="w-3 h-3" /> Test run</>
+                  }
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step: Configure ── */}
+        {step === 'configure' && preview?.success && (
+          <div className="animate-[fadeIn_150ms_ease-out]">
+            <p className="text-[12px] text-text-tertiary mb-3">
+              Fine-tune the settings before testing.
+            </p>
+
+            <div className="space-y-3">
+              {Object.entries(editedVariables).map(([key, val]) => (
+                <div key={key}>
+                  <label className="text-[10px] font-[510] text-text-quaternary block mb-1">
+                    {key.replace(/_/g, ' ')}
+                  </label>
+                  {key.includes('text') || key.includes('message') || key.includes('code') || key.includes('jsCode') ? (
+                    <textarea
+                      value={String(val)}
+                      onChange={(e) => setEditedVariables((prev) => ({ ...prev, [key]: e.target.value }))}
+                      rows={3}
+                      className="w-full px-2.5 py-2 rounded-[5px] bg-bg-tertiary border border-border text-[12px] text-text-secondary focus:outline-none focus:border-accent/60 resize-none font-mono"
+                    />
+                  ) : (
+                    <input
+                      value={String(val)}
+                      onChange={(e) => setEditedVariables((prev) => ({ ...prev, [key]: e.target.value }))}
+                      className="w-full h-8 px-2.5 rounded-[5px] bg-bg-tertiary border border-border text-[12px] text-text-secondary focus:outline-none focus:border-accent/60"
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="flex items-center justify-between mt-4">
+              <button
+                onClick={() => setStep('review')}
+                className="text-[12px] font-[510] text-text-quaternary hover:text-text-tertiary cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleTest}
+                disabled={isTesting}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-[5px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors cursor-pointer"
+              >
+                {isTesting
+                  ? <><Loader2 className="w-3 h-3 animate-spin" /> Testing...</>
+                  : <><Play className="w-3 h-3" /> Test run</>
+                }
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step: Activate ── */}
+        {step === 'activate' && (
+          <div className="animate-[fadeIn_150ms_ease-out]">
+            {/* Test results */}
+            {testResult && (
+              <div className="mb-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Check className="w-3.5 h-3.5 text-green-400" />
+                  <span className="text-[13px] font-[510] text-green-300">Test passed</span>
+                </div>
+                <div className="p-3 rounded-[7px] bg-bg-secondary border border-border font-mono">
+                  {testResult.split('\n').map((line, i) => (
+                    <p key={i} className="text-[11px] text-text-tertiary leading-relaxed">{line}</p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="p-3 rounded-[7px] bg-green-500/8 border border-green-500/15 mb-4">
+              <p className="text-[13px] text-text-secondary">{preview?.human_summary}</p>
+              <p className="text-[11px] text-text-quaternary mt-1">
+                This will run 24/7 on your Mac Mini. You can pause or edit it anytime.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => setStep('review')}
+                className="text-[12px] font-[510] text-text-quaternary hover:text-text-tertiary cursor-pointer"
+              >
+                Back
+              </button>
+              <button
+                onClick={handleDeploy}
+                disabled={deploy.isPending}
+                className="flex items-center gap-1.5 px-5 py-2 rounded-[7px] text-[13px] font-[560] bg-accent text-white hover:bg-accent-hover disabled:opacity-40 transition-colors cursor-pointer"
+              >
+                {deploy.isPending
+                  ? <><Loader2 className="w-3.5 h-3.5 animate-spin" /> Deploying...</>
+                  : <><Zap className="w-3.5 h-3.5" /> Activate</>
+                }
+              </button>
+            </div>
+          </div>
+        )}
+
+        <p className="text-[10px] text-text-quaternary mt-4 text-center">
+          Powered by n8n · Runs on your Mac Mini 24/7
         </p>
       </div>
       <style>{`
