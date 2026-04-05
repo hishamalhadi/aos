@@ -166,9 +166,10 @@ case "${1:-help}" in
         ;;
 
     sync-mcp)
-        # Register AOS MCP servers into ~/.claude/mcp.json (where Claude Code reads them)
-        MCP_FILE="$HOME/.claude/mcp.json"
-        mkdir -p "$HOME/.claude"
+        # Register AOS MCP servers into ~/.claude.json (where Claude Code reads them)
+        # Note: Claude Code uses ~/.claude.json for user-scoped MCP servers,
+        # NOT ~/.claude/mcp.json. Project-scoped servers go in .mcp.json at project root.
+        MCP_FILE="$HOME/.claude.json"
 
         python3 - "$AOS_DIR" "$MCP_FILE" << 'SYNCMCP'
 import json, sys
@@ -195,14 +196,12 @@ aos_servers = {
         "type": "stdio",
         "command": str(home / ".aos/services/memory/.venv/bin/python"),
         "args": [str(aos_dir / "core/services/memory/main.py")],
-        "cwd": str(aos_dir / "core/services/memory"),
         "env": {}
     },
     "crawler": {
         "type": "stdio",
         "command": str(home / ".aos/services/crawler/.venv/bin/python"),
         "args": [str(aos_dir / "core/services/crawler/main.py")],
-        "cwd": str(aos_dir / "core/services/crawler"),
         "env": {}
     }
 }
