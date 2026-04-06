@@ -174,6 +174,38 @@ async def lifespan(app: FastAPI):
         app.state.session_manager = None
         app.state.intelligence_engine = None
 
+    # Context store — shared qareen memory across all surfaces
+    try:
+        from qareen.intelligence.context_store import QareenContextStore
+
+        app.state.context_store = QareenContextStore()
+        logger.info("Qareen context store initialized")
+    except Exception:
+        logger.exception("Failed to create context store")
+        app.state.context_store = None
+
+    # Stream processor — threads + classifies transcript segments
+    try:
+        from qareen.intelligence.stream_processor import StreamProcessor
+
+        app.state.stream_processor = StreamProcessor(bus=bus)
+        logger.info("Stream processor initialized")
+    except Exception:
+        logger.exception("Failed to create stream processor")
+        app.state.stream_processor = None
+
+    # TTS service — ElevenLabs streaming voice output
+    try:
+        from qareen.voice.tts import TTSService
+
+        tts_service = TTSService()
+        await tts_service.initialize()
+        app.state.tts_service = tts_service
+        logger.info("TTS service initialized (available=%s)", tts_service.available)
+    except Exception:
+        logger.exception("Failed to create TTS service")
+        app.state.tts_service = None
+
     # Wire companion stream to receive voice events from bus.
     # Must happen AFTER intelligence engine so transcripts feed into AI processing.
     if bus:
@@ -694,6 +726,26 @@ try:
 except ImportError:
     logger.warning("Voice WebSocket router not available")
 
+# TTS WebSocket
+try:
+    from starlette.websockets import WebSocket as StarletteWebSocket
+
+    from qareen.voice.tts import handle_tts_websocket
+
+    @app.websocket("/ws/tts")
+    async def tts_stream(websocket: StarletteWebSocket):
+        await websocket.accept()
+        tts_service = getattr(app.state, "tts_service", None)
+        bus = getattr(app.state, "bus", None)
+        if not tts_service or not tts_service.available:
+            await websocket.close(code=1011, reason="TTS not available")
+            return
+        await handle_tts_websocket(websocket, tts_service, bus)
+
+    logger.info("TTS WebSocket endpoint registered at /ws/tts")
+except ImportError:
+    logger.warning("TTS WebSocket not available")
+
 # API route modules — each is optional
 _api_routers = [
     ("qareen.api.notifications", "notifications"),
@@ -713,8 +765,11 @@ _api_routers = [
     ("qareen.api.meetings", "meetings"),
     ("qareen.api.days", "days"),
     ("qareen.api.connectors", "connectors"),
+    ("qareen.api.integrations", "integrations"),
     ("qareen.api.architect", "architect"),
     ("qareen.api.flow_builder", "flow_builder"),
+    ("qareen.api.assist", "assist"),
+    ("qareen.api.context", "context"),
 ]
 
 for module_path, name in _api_routers:

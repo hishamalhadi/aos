@@ -15,6 +15,7 @@ const Agents = lazy(() => import('@/pages/Agents'));
 const Automations = lazy(() => import('@/pages/Automations'));
 const Org = lazy(() => import('@/pages/Org'));
 const Skills = lazy(() => import('@/pages/Skills'));
+const Integrations = lazy(() => import('@/pages/Integrations'));
 
 // ── Sub-views ──
 const Sessions = lazy(() => import('@/pages/Sessions'));
@@ -48,6 +49,7 @@ export default function App() {
         <Route path="/agents" element={<Agents />} />
         <Route path="/agents/:id" element={<AgentConfig />} />
         <Route path="/skills" element={<Skills />} />
+        <Route path="/integrations" element={<Integrations />} />
         <Route path="/org" element={<Org />} />
 
         {/* ── Sub-routes ── */}
