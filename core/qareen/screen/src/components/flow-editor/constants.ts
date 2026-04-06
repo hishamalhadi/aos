@@ -179,6 +179,78 @@ export const NODE_TYPES: Record<string, NodeTypeDefinition> = {
     defaultParameters: { options: { includeOtherFields: true } },
     handles: { inputs: 1, outputs: 1 },
   },
+
+  // ── AOS-specific ──
+
+  'aos.agentDispatch': {
+    n8nType: 'aos.agentDispatch',
+    label: 'Agent Dispatch',
+    category: 'action',
+    icon: 'bot',
+    color: '#A855F7',
+    description: 'Dispatch an AOS agent to perform a task',
+    fields: [
+      { key: 'agent_id', label: 'Agent', type: 'text', placeholder: 'steward', required: true },
+      { key: 'task', label: 'Task', type: 'textarea', placeholder: 'Describe the task...', required: true },
+    ],
+    defaultParameters: { agent_id: '', task: '', context: '' },
+    handles: { inputs: 1, outputs: 1 },
+  },
+
+  'aos.hitlApproval': {
+    n8nType: 'aos.hitlApproval',
+    label: 'Human Approval',
+    category: 'logic',
+    icon: 'hand',
+    color: '#F59E0B',
+    description: 'Pause workflow until human approves',
+    fields: [
+      { key: 'message', label: 'Approval Message', type: 'textarea', placeholder: 'Please review and approve...' },
+      { key: 'notify_via', label: 'Notify Via', type: 'select', options: [
+        { label: 'Telegram', value: 'telegram' }, { label: 'Email', value: 'email' },
+      ]},
+    ],
+    defaultParameters: { message: '', notify_via: 'telegram' },
+    handles: { inputs: 1, outputs: 1 },
+  },
+
+  'n8n-nodes-base.executeWorkflow': {
+    n8nType: 'n8n-nodes-base.executeWorkflow',
+    label: 'Sub-Workflow',
+    category: 'logic',
+    icon: 'workflow',
+    color: '#14B8A6',
+    description: 'Execute another workflow as a sub-workflow',
+    fields: [
+      { key: 'workflowId', label: 'Workflow ID', type: 'text', placeholder: 'workflow-id' },
+    ],
+    defaultParameters: { source: 'database', workflowId: '' },
+    handles: { inputs: 1, outputs: 1 },
+  },
+
+  'n8n-nodes-base.switch': {
+    n8nType: 'n8n-nodes-base.switch',
+    label: 'Switch',
+    category: 'logic',
+    icon: 'git-branch',
+    color: '#BF5AF2',
+    description: 'Route to different outputs based on conditions',
+    fields: [],
+    defaultParameters: { mode: 'rules', options: {} },
+    handles: { inputs: 1, outputs: 4 },
+  },
+
+  'n8n-nodes-base.wait': {
+    n8nType: 'n8n-nodes-base.wait',
+    label: 'Wait',
+    category: 'logic',
+    icon: 'clock',
+    color: '#F59E0B',
+    description: 'Pause execution until resumed via webhook',
+    fields: [],
+    defaultParameters: { resume: 'webhook' },
+    handles: { inputs: 1, outputs: 1 },
+  },
 };
 
 // ── Category metadata ──
@@ -187,6 +259,7 @@ export const CATEGORY_META: Record<string, { label: string; color: string }> = {
   trigger: { label: 'Triggers', color: '#D9730D' },
   action: { label: 'Actions', color: '#0A84FF' },
   logic: { label: 'Logic', color: '#BF5AF2' },
+  agent: { label: 'Agents', color: '#A855F7' },
 };
 
 // ── Helpers ──

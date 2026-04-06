@@ -4,13 +4,15 @@
  * Grouped by category (Triggers, Actions, Logic).
  * Drag items onto the canvas to add nodes.
  */
-import { useState } from 'react';
+import { useContext, useState } from 'react';
 import {
   Clock, Send, Mail, Calendar, Sheet, Globe,
   GitBranch, Code, Edit, Zap, Webhook, Search,
   ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { getNodeTypesByCategory, CATEGORY_META } from '../constants';
+import { ConnectorContext } from '../ConnectorContext';
+import { getNodeConnectionStatus, statusDotColor } from '../../../hooks/useConnectorStatus';
 import type { NodeTypeDefinition } from '../types';
 
 const ICONS: Record<string, typeof Zap> = {
@@ -21,6 +23,9 @@ const ICONS: Record<string, typeof Zap> = {
 
 function PaletteItem({ def }: { def: NodeTypeDefinition }) {
   const Icon = ICONS[def.icon] || Zap;
+  const connectorNodeTypes = useContext(ConnectorContext);
+  const status = getNodeConnectionStatus(connectorNodeTypes, def.n8nType);
+  const isDisconnected = status === 'available' || status === 'broken';
 
   const onDragStart = (e: React.DragEvent) => {
     e.dataTransfer.setData('application/reactflow', def.n8nType);
@@ -32,6 +37,7 @@ function PaletteItem({ def }: { def: NodeTypeDefinition }) {
       draggable
       onDragStart={onDragStart}
       className="flex items-center gap-2.5 px-3 py-2 rounded-[7px] cursor-grab hover:bg-hover active:cursor-grabbing transition-colors"
+      style={{ opacity: isDisconnected ? 0.45 : 1 }}
     >
       <div
         className="w-7 h-7 rounded-[5px] flex items-center justify-center flex-shrink-0"
@@ -43,6 +49,12 @@ function PaletteItem({ def }: { def: NodeTypeDefinition }) {
         <span className="text-[12px] font-[510] text-text-secondary block">{def.label}</span>
         <span className="text-[10px] text-text-quaternary block truncate">{def.description}</span>
       </div>
+      {status !== 'always' && (
+        <div
+          className="w-[5px] h-[5px] rounded-full flex-shrink-0"
+          style={{ backgroundColor: statusDotColor(status) }}
+        />
+      )}
     </div>
   );
 }

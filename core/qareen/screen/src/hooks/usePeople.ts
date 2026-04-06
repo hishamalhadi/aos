@@ -12,6 +12,13 @@ import type {
   PipelineRunResponse,
   OrbitResponse,
   UpdatePersonRequest,
+  CircleListResponse,
+  CircleDetailResponse,
+  OrgListResponse,
+  OrgDetailResponse,
+  FamilyTreeResponse,
+  HygieneListResponse,
+  HygieneStatsResponse,
 } from '@/lib/types';
 
 const API = '/api';
@@ -221,5 +228,227 @@ export function useOrbitData() {
       return res.json();
     },
     staleTime: 60_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Recent activity feed
+// ---------------------------------------------------------------------------
+
+export interface RecentActivityItem {
+  person_id: string
+  person_name: string
+  importance: number
+  channel: string
+  direction: string
+  msg_count: number
+  occurred_at?: string
+  organization?: string
+}
+
+export interface RecentActivityResponse {
+  items: RecentActivityItem[]
+  total: number
+}
+
+export function useRecentActivity(days = 14, limit = 30) {
+  return useQuery({
+    queryKey: ['people-recent', days, limit],
+    queryFn: async (): Promise<RecentActivityResponse> => {
+      const res = await fetch(`${API}/people/recent?days=${days}&limit=${limit}`);
+      if (!res.ok) throw new Error(`Recent activity API error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30_000,
+    refetchInterval: 120_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Relationship graph
+// ---------------------------------------------------------------------------
+
+export interface GraphNode {
+  id: string
+  name: string
+  importance: number
+  organization?: string
+}
+
+export interface GraphEdge {
+  source: string
+  target: string
+  type: string
+  subtype?: string
+  context?: string
+  strength: number
+}
+
+export interface RelationshipGraphResponse {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
+export function useRelationshipGraph() {
+  return useQuery({
+    queryKey: ['people-graph'],
+    queryFn: async (): Promise<RelationshipGraphResponse> => {
+      const res = await fetch(`${API}/people/graph`);
+      if (!res.ok) throw new Error(`Graph API error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 120_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Circles
+// ---------------------------------------------------------------------------
+
+export function useCircles() {
+  return useQuery({
+    queryKey: ['people-circles'],
+    queryFn: async (): Promise<CircleListResponse> => {
+      const res = await fetch(`${API}/people/circles`);
+      if (!res.ok) throw new Error(`Circles API error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useCircleDetail(id: string | null) {
+  return useQuery({
+    queryKey: ['people-circle', id],
+    queryFn: async (): Promise<CircleDetailResponse> => {
+      const res = await fetch(`${API}/people/circles/${id}`);
+      if (!res.ok) throw new Error(`Circle detail error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+    enabled: !!id,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Organizations
+// ---------------------------------------------------------------------------
+
+export function useOrgs() {
+  return useQuery({
+    queryKey: ['people-orgs'],
+    queryFn: async (): Promise<OrgListResponse> => {
+      const res = await fetch(`${API}/people/orgs`);
+      if (!res.ok) throw new Error(`Orgs API error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useOrgDetail(id: string | null) {
+  return useQuery({
+    queryKey: ['people-org', id],
+    queryFn: async (): Promise<OrgDetailResponse> => {
+      const res = await fetch(`${API}/people/orgs/${id}`);
+      if (!res.ok) throw new Error(`Org detail error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+    enabled: !!id,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Family Tree
+// ---------------------------------------------------------------------------
+
+export function useFamilyTree() {
+  return useQuery({
+    queryKey: ['people-family'],
+    queryFn: async (): Promise<FamilyTreeResponse> => {
+      const res = await fetch(`${API}/people/graph/family`);
+      if (!res.ok) throw new Error(`Family tree error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 120_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Hygiene Queue
+// ---------------------------------------------------------------------------
+
+export function useHygieneQueue(status = 'pending') {
+  return useQuery({
+    queryKey: ['people-hygiene', status],
+    queryFn: async (): Promise<HygieneListResponse> => {
+      const res = await fetch(`${API}/people/hygiene?status=${status}`);
+      if (!res.ok) throw new Error(`Hygiene API error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useHygieneStats() {
+  return useQuery({
+    queryKey: ['people-hygiene-stats'],
+    queryFn: async (): Promise<HygieneStatsResponse> => {
+      const res = await fetch(`${API}/people/hygiene/stats`);
+      if (!res.ok) throw new Error(`Hygiene stats error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useApproveHygiene() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (issueId: string) => {
+      const res = await fetch(`${API}/people/hygiene/${issueId}/approve`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Approve failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['people-hygiene'] });
+      qc.invalidateQueries({ queryKey: ['people-hygiene-stats'] });
+      qc.invalidateQueries({ queryKey: ['people'] });
+    },
+  });
+}
+
+export function useRejectHygiene() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ issueId, notes }: { issueId: string; notes?: string }) => {
+      const res = await fetch(`${API}/people/hygiene/${issueId}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes: notes || '' }),
+      });
+      if (!res.ok) throw new Error(`Reject failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['people-hygiene'] });
+      qc.invalidateQueries({ queryKey: ['people-hygiene-stats'] });
+    },
+  });
+}
+
+export function useRunHygieneScan() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`${API}/people/hygiene/run`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Scan failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['people-hygiene'] });
+      qc.invalidateQueries({ queryKey: ['people-hygiene-stats'] });
+    },
   });
 }

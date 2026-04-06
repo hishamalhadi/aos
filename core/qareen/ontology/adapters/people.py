@@ -584,25 +584,26 @@ class PeopleAdapter(Adapter):
         ).fetchall()
 
         channels: dict[str, str] = {}
-        seen_types: set[str] = set()
+        wa_jids: list[str] = []
         for ident in idents:
             itype = ident["type"]
-            if itype in seen_types:
-                continue
-            seen_types.add(itype)
             val = ident["value"]
-            if itype == "email":
+            if itype == "email" and "email" not in channels:
                 person.email = val
                 channels["email"] = val
-            elif itype == "phone":
+            elif itype == "phone" and "phone" not in channels:
                 person.phone = val
                 channels["phone"] = val
             elif itype == "wa_jid":
-                person.whatsapp_jid = val
-                channels["whatsapp"] = val
-            elif itype == "telegram_id":
+                wa_jids.append(val)
+            elif itype == "telegram_id" and "telegram" not in channels:
                 person.telegram_id = val
                 channels["telegram"] = val
+        # Prefer @s.whatsapp.net (messaging) over @status/@lid
+        if wa_jids:
+            best = next((j for j in wa_jids if "@s.whatsapp.net" in j), wa_jids[0])
+            person.whatsapp_jid = best
+            channels["whatsapp"] = best
         person.channels = channels
 
         # -- Contact metadata ------------------------------------------------

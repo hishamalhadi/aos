@@ -116,16 +116,26 @@ def _check_file_exists(path_pattern: str) -> HealthResult:
 
 
 def _check_mcp_registered(server_name: str) -> HealthResult:
-    """Check that an MCP server is registered in Claude Code."""
-    try:
-        if MCP_JSON.exists():
-            data = json.loads(MCP_JSON.read_text())
-            servers = data.get("mcpServers", {})
-            if server_name in servers:
-                return HealthResult("mcp_registered", "ok", f"Server '{server_name}' registered")
-    except Exception:
-        pass
-    return HealthResult("mcp_registered", "fail", f"Server '{server_name}' not in mcp.json")
+    """Check that an MCP server is registered in Claude Code.
+
+    Checks both ~/.claude/mcp.json (legacy) and ~/.claude.json (current).
+    `claude mcp add` writes to ~/.claude.json, but older installs use mcp.json.
+    """
+    # Check all known MCP config locations
+    search_paths = [
+        MCP_JSON,                           # ~/.claude/mcp.json (legacy)
+        Path.home() / ".claude.json",       # ~/.claude.json (current)
+    ]
+    for config_path in search_paths:
+        try:
+            if config_path.exists():
+                data = json.loads(config_path.read_text())
+                servers = data.get("mcpServers", {})
+                if server_name in servers:
+                    return HealthResult("mcp_registered", "ok", f"Server '{server_name}' registered")
+        except Exception:
+            continue
+    return HealthResult("mcp_registered", "fail", f"Server '{server_name}' not in mcp config")
 
 
 def _check_command(command: str, name: str = "command") -> HealthResult:

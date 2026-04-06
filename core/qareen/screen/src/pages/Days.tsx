@@ -1,4 +1,5 @@
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useRegisterPageActions, type PageAction } from '@/hooks/usePageActions';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { todayStr, shiftDate, type ViewMode } from './days/shared';
@@ -239,6 +240,35 @@ export default function Days() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [view, date, navigate]);
+
+  const pageActions: PageAction[] = useMemo(() => [
+    {
+      id: 'timeline.switch_view',
+      label: 'Switch timeline view',
+      category: 'navigate',
+      params: [{ name: 'view', type: 'enum' as const, required: true, description: 'View mode', options: ['day', 'week', 'month', 'year'] }],
+      execute: ({ view: v }) => navigate(navPath(v as ViewMode, date)),
+    },
+    {
+      id: 'timeline.go_today',
+      label: 'Go to today',
+      category: 'navigate',
+      execute: () => navigate(navPath(view, todayStr())),
+    },
+    {
+      id: 'timeline.go_forward',
+      label: 'Go forward one period',
+      category: 'navigate',
+      execute: () => navigate(navPath(view, stepDate(view, date, 1))),
+    },
+    {
+      id: 'timeline.go_back',
+      label: 'Go back one period',
+      category: 'navigate',
+      execute: () => navigate(navPath(view, stepDate(view, date, -1))),
+    },
+  ], [view, date, navigate])
+  useRegisterPageActions(pageActions)
 
   return (
     <div className="h-full overflow-y-auto overflow-x-hidden">

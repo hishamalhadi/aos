@@ -5,6 +5,7 @@ import type { FlowNodeData } from '../types';
 import {
   Clock, Send, Mail, Calendar, Sheet, Globe,
   GitBranch, Code, Edit, Zap, Webhook, CheckSquare,
+  Bot, Hand, Workflow,
 } from 'lucide-react';
 
 const ICONS: Record<string, typeof Zap> = {
@@ -20,6 +21,9 @@ const ICONS: Record<string, typeof Zap> = {
   zap: Zap,
   webhook: Webhook,
   'check-square': CheckSquare,
+  bot: Bot,
+  hand: Hand,
+  workflow: Workflow,
 };
 
 interface BaseNodeProps extends NodeProps {

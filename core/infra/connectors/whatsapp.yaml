@@ -1,0 +1,53 @@
+id: whatsapp
+name: WhatsApp
+icon: message-circle
+color: "#25D366"
+type: service
+tier: 2
+category: communication
+description: Send and receive WhatsApp messages via whatsmeow bridge + desktop app local history.
+
+capabilities:
+  - id: send_message
+    label: Send Message
+    description: Send WhatsApp messages to contacts via the bridge
+  - id: receive_messages
+    label: Receive Messages
+    description: Receive incoming WhatsApp messages in real-time via bridge
+  - id: message_history
+    label: Message History
+    description: Read full message history from WhatsApp desktop local database
+  - id: contact_lookup
+    label: Contact Lookup
+    description: Look up WhatsApp contacts and resolve phone numbers
+
+health:
+  checks:
+    - name: whatsapp_desktop
+      type: app_exists
+      path: /Applications/WhatsApp.app
+    - name: local_database
+      type: file_exists
+      path: ~/Library/Group Containers/group.net.whatsapp.WhatsApp.shared/ChatStorage.sqlite
+    - name: whatsmeow_service
+      type: port
+      port: 7601
+
+n8n:
+  credential_types: []
+  node_types: []
+  note: "No native n8n nodes. Use agent_dispatch to send messages via the bridge API, or httpRequest to POST to http://127.0.0.1:7601/send"
+
+automation_ideas:
+  - id: message_digest
+    name: WhatsApp Daily Digest
+    description: Summarize unread WhatsApp messages and send key highlights to Telegram each morning
+    required_also: [telegram]
+  - id: auto_reply
+    name: WhatsApp Auto-Reply
+    description: Auto-respond to WhatsApp messages when calendar shows you're in a meeting
+    required_also: [apple-calendar]
+  - id: contact_sync
+    name: Contact Intelligence
+    description: Track WhatsApp conversation frequency and flag contacts you haven't replied to
+    required_also: []

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from 'react';
+import { useRegisterPageActions, type PageAction } from '@/hooks/usePageActions';
 import { useLocation } from 'react-router-dom';
 import { Search, FolderOpen, FolderClosed, FileText, ChevronRight, ChevronDown, X, Clock, BookOpen, Hash, Layers, ArrowLeft, FolderTree as FolderTreeIcon, Library, CalendarDays, ScrollText } from 'lucide-react';
 import { Tag, type TagColor } from '@/components/primitives/Tag';
@@ -420,6 +421,30 @@ export default function VaultPage() {
     if (section === 'all') return collections;
     return collections.filter(c => meta.collections.includes(c.name));
   }, [collections, section, meta.collections]);
+
+  const pageActions: PageAction[] = useMemo(() => [
+    {
+      id: 'vault.search',
+      label: 'Search the vault',
+      category: 'search',
+      params: [{ name: 'query', type: 'string' as const, required: true, description: 'Search query' }],
+      execute: ({ query }) => { setSearchQuery(query as string); searchInputRef.current?.focus() },
+    },
+    {
+      id: 'vault.switch_tab',
+      label: 'Switch vault view',
+      category: 'navigate',
+      params: [{ name: 'tab', type: 'enum' as const, required: true, description: 'View mode', options: ['feed', 'pipeline'] }],
+      execute: ({ tab }) => setActiveTab(tab as 'feed' | 'pipeline'),
+    },
+    {
+      id: 'vault.toggle_tree',
+      label: 'Toggle file tree',
+      category: 'toggle',
+      execute: () => setTreeOpen(o => !o),
+    },
+  ], [])
+  useRegisterPageActions(pageActions)
 
   // Filter tree nodes for the current section
   const filteredTree = useMemo(() => {

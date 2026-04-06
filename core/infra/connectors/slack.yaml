@@ -1,0 +1,54 @@
+id: slack
+name: Slack
+icon: hash
+color: "#4A154B"
+type: mcp
+tier: 3
+category: communication
+description: Workspace messaging, channels, and threads via Slack MCP server.
+
+capabilities:
+  - id: send_message
+    label: Send Message
+    description: Send messages to channels, DMs, and threads
+  - id: search_messages
+    label: Search Messages
+    description: Search across workspace for messages, files, and conversations
+  - id: channel_management
+    label: Channel Management
+    description: List, join, and monitor channels
+  - id: thread_replies
+    label: Thread Replies
+    description: Read and post replies in message threads
+
+health:
+  checks:
+    - name: mcp_registered
+      type: mcp_registered
+      server_name: slack
+    - name: credentials
+      type: keychain
+      keys:
+        - SLACK_BOT_TOKEN
+
+n8n:
+  credential_types:
+    - slackApi
+  node_types:
+    - n8n-nodes-base.slack
+    - n8n-nodes-base.slackTrigger
+  note: "Slack n8n nodes available. Also accessible via Slack MCP server for richer interaction."
+
+automation_ideas:
+  - id: channel_digest
+    name: Slack Channel Digest
+    description: Summarize daily activity in key Slack channels and send to Telegram
+    required_also: [telegram]
+  - id: standup_post
+    name: Auto Standup
+    description: Generate and post daily standup based on git commits and completed tasks
+    required_also: [github]
+  - id: mention_alert
+    name: Mention Alert
+    description: Forward Slack mentions and DMs to Telegram when away
+    required_also: [telegram]

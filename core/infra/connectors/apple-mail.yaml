@@ -1,0 +1,50 @@
+id: apple-mail
+name: Mail
+icon: mail
+color: "#007AFF"
+type: native
+tier: 1
+category: communication
+description: Read and compose email via Apple Mail. Full inbox access via AppleScript and local database.
+
+capabilities:
+  - id: read_inbox
+    label: Read Inbox
+    description: Read unread and recent emails from all configured accounts
+  - id: compose_email
+    label: Compose Email
+    description: Draft and send emails via Apple Mail
+  - id: search_email
+    label: Search Email
+    description: Search emails by sender, subject, date, or content
+  - id: folder_management
+    label: Folder Management
+    description: List mailboxes, move messages between folders
+
+health:
+  checks:
+    - name: app_exists
+      type: app_exists
+      path: /System/Applications/Mail.app
+    - name: mail_data
+      type: file_exists
+      path: ~/Library/Mail/V*/MailData/Envelope Index
+
+n8n:
+  credential_types: []
+  node_types: []
+  note: "No native n8n nodes. Use agent_dispatch with AppleScript, or use Gmail n8n nodes for Google accounts."
+
+automation_ideas:
+  - id: email_triage
+    name: Email Triage
+    description: Scan inbox for urgent emails and forward summaries to Telegram
+    required_also: [telegram]
+  - id: newsletter_digest
+    name: Newsletter Digest
+    description: Collect newsletter emails and compile a daily reading digest
+    required_also: []
+  - id: invoice_tracker
+    name: Invoice Tracker
+    description: Extract invoices from email and log to Google Sheets
+    required_also: [google-workspace]

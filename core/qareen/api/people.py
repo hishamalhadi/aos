@@ -817,6 +817,747 @@ async def get_orbit_data(request: Request) -> OrbitResponse:
     return OrbitResponse(nodes=nodes, total=len(nodes))
 
 
+# ---------------------------------------------------------------------------
+# Recent Activity — cross-person interaction feed
+# ---------------------------------------------------------------------------
+
+class RecentActivityItem(BaseModel):
+    person_id: str
+    person_name: str
+    importance: int = 4
+    channel: str
+    direction: str
+    msg_count: int
+    occurred_at: str | None = None
+    organization: str | None = None
+
+class RecentActivityResponse(BaseModel):
+    items: list[RecentActivityItem] = Field(default_factory=list)
+    total: int = 0
+
+
+@router.get("/recent", response_model=RecentActivityResponse)
+async def get_recent_activity(
+    request: Request,
+    days: int = Query(14, ge=1, le=90),
+    limit: int = Query(30, ge=1, le=100),
+) -> RecentActivityResponse:
+    """Cross-person interaction feed — recent communications across all channels."""
+    import sqlite3
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return RecentActivityResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    import time
+    cutoff = int(time.time()) - days * 86400
+
+    try:
+        rows = conn.execute("""
+            SELECT i.person_id, p.canonical_name AS person_name, p.importance,
+                   i.channel, i.direction, i.msg_count, i.occurred_at,
+                   cm.organization
+            FROM interactions i
+            JOIN people p ON p.id = i.person_id
+            LEFT JOIN contact_metadata cm ON cm.person_id = p.id
+            WHERE i.occurred_at >= ? AND p.is_archived = 0
+            ORDER BY i.occurred_at DESC
+            LIMIT ?
+        """, (cutoff, limit)).fetchall()
+
+        items = []
+        for r in rows:
+            from datetime import datetime
+            ts = datetime.fromtimestamp(r["occurred_at"]).isoformat() if r["occurred_at"] else None
+            items.append(RecentActivityItem(
+                person_id=r["person_id"],
+                person_name=r["person_name"],
+                importance=r["importance"],
+                channel=r["channel"],
+                direction=r["direction"],
+                msg_count=r["msg_count"],
+                occurred_at=ts,
+                organization=r.get("organization"),
+            ))
+        return RecentActivityResponse(items=items, total=len(items))
+    except Exception:
+        logger.exception("Failed to get recent activity")
+        return RecentActivityResponse()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Relationships / Graph data
+# ---------------------------------------------------------------------------
+
+class RelationshipGraphNode(BaseModel):
+    id: str
+    name: str
+    importance: int = 4
+    organization: str | None = None
+
+class RelationshipGraphEdge(BaseModel):
+    source: str
+    target: str
+    type: str
+    subtype: str | None = None
+    context: str | None = None
+    strength: float = 0.5
+
+class RelationshipGraphResponse(BaseModel):
+    nodes: list[RelationshipGraphNode] = Field(default_factory=list)
+    edges: list[RelationshipGraphEdge] = Field(default_factory=list)
+
+
+@router.get("/graph", response_model=RelationshipGraphResponse)
+async def get_relationship_graph(request: Request) -> RelationshipGraphResponse:
+    """Relationship graph — family, community, and org connections."""
+    import sqlite3
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return RelationshipGraphResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        # Get all explicit relationships
+        edges = []
+        node_ids: set[str] = set()
+        rels = conn.execute("""
+            SELECT person_a_id, person_b_id, type, subtype, context, strength
+            FROM relationships
+        """).fetchall()
+        for r in rels:
+            edges.append(RelationshipGraphEdge(
+                source=r["person_a_id"], target=r["person_b_id"],
+                type=r["type"], subtype=r.get("subtype"),
+                context=r.get("context"), strength=r.get("strength", 0.5),
+            ))
+            node_ids.add(r["person_a_id"])
+            node_ids.add(r["person_b_id"])
+
+        # Also include inner circle even if no explicit relationships
+        inner = conn.execute(
+            "SELECT id FROM people WHERE importance <= 2 AND is_archived = 0"
+        ).fetchall()
+        for r in inner:
+            node_ids.add(r["id"])
+
+        # Fetch node details
+        nodes = []
+        if node_ids:
+            placeholders = ",".join("?" * len(node_ids))
+            people = conn.execute(f"""
+                SELECT p.id, p.canonical_name, p.importance, cm.organization
+                FROM people p
+                LEFT JOIN contact_metadata cm ON cm.person_id = p.id
+                WHERE p.id IN ({placeholders})
+            """, list(node_ids)).fetchall()
+            for p in people:
+                nodes.append(RelationshipGraphNode(
+                    id=p["id"], name=p["canonical_name"],
+                    importance=p["importance"],
+                    organization=p.get("organization"),
+                ))
+
+        return RelationshipGraphResponse(nodes=nodes, edges=edges)
+    except Exception:
+        logger.exception("Failed to build relationship graph")
+        return RelationshipGraphResponse()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Circles — detected social groups with memberships
+# ---------------------------------------------------------------------------
+
+
+class CircleResponse(BaseModel):
+    id: str
+    name: str
+    category: str | None = None
+    subcategory: str | None = None
+    source: str | None = None
+    confidence: float = 1.0
+    member_count: int = 0
+
+
+class CircleListResponse(BaseModel):
+    circles: list[CircleResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class CircleMemberResponse(BaseModel):
+    person_id: str
+    name: str
+    importance: int = 3
+    role_in_circle: str | None = None
+    confidence: float = 1.0
+
+
+class CircleDetailResponse(BaseModel):
+    circle: CircleResponse
+    members: list[CircleMemberResponse] = Field(default_factory=list)
+
+
+@router.get("/circles", response_model=CircleListResponse)
+async def list_circles(request: Request) -> CircleListResponse:
+    """All detected circles with member counts."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return CircleListResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        rows = conn.execute("""
+            SELECT c.id, c.name, c.category, c.subcategory, c.source, c.confidence,
+                   COUNT(cm.person_id) AS member_count
+            FROM circle c
+            LEFT JOIN circle_membership cm ON cm.circle_id = c.id
+            GROUP BY c.id
+            ORDER BY member_count DESC
+        """).fetchall()
+
+        circles = [
+            CircleResponse(
+                id=r["id"],
+                name=r["name"],
+                category=r.get("category"),
+                subcategory=r.get("subcategory"),
+                source=r.get("source"),
+                confidence=r.get("confidence", 1.0),
+                member_count=r["member_count"],
+            )
+            for r in rows
+        ]
+        return CircleListResponse(circles=circles, total=len(circles))
+    except Exception:
+        logger.exception("Failed to list circles")
+        return CircleListResponse()
+    finally:
+        conn.close()
+
+
+@router.get("/circles/{circle_id}", response_model=CircleDetailResponse)
+async def get_circle(circle_id: str) -> CircleDetailResponse | JSONResponse:
+    """Circle details with member list."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return JSONResponse({"error": "People database not found"}, status_code=404)
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        row = conn.execute("""
+            SELECT c.id, c.name, c.category, c.subcategory, c.source, c.confidence,
+                   COUNT(cm.person_id) AS member_count
+            FROM circle c
+            LEFT JOIN circle_membership cm ON cm.circle_id = c.id
+            WHERE c.id = ?
+            GROUP BY c.id
+        """, (circle_id,)).fetchone()
+
+        if not row:
+            return JSONResponse({"error": f"Circle not found: {circle_id}"}, status_code=404)
+
+        circle = CircleResponse(
+            id=row["id"],
+            name=row["name"],
+            category=row.get("category"),
+            subcategory=row.get("subcategory"),
+            source=row.get("source"),
+            confidence=row.get("confidence", 1.0),
+            member_count=row["member_count"],
+        )
+
+        members_rows = conn.execute("""
+            SELECT cm.person_id, p.canonical_name AS name, p.importance,
+                   cm.role AS role_in_circle, cm.confidence
+            FROM circle_membership cm
+            JOIN people p ON p.id = cm.person_id
+            WHERE cm.circle_id = ?
+            ORDER BY p.importance ASC, p.canonical_name ASC
+        """, (circle_id,)).fetchall()
+
+        members = [
+            CircleMemberResponse(
+                person_id=m["person_id"],
+                name=m["name"] or "Unknown",
+                importance=m.get("importance", 3),
+                role_in_circle=m.get("role_in_circle"),
+                confidence=m.get("confidence", 1.0),
+            )
+            for m in members_rows
+        ]
+
+        return CircleDetailResponse(circle=circle, members=members)
+    except Exception:
+        logger.exception("Failed to get circle %s", circle_id)
+        return JSONResponse({"error": "Failed to load circle"}, status_code=500)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Hygiene — data quality queue management
+# ---------------------------------------------------------------------------
+
+
+class HygieneIssueResponse(BaseModel):
+    id: str
+    action_type: str
+    person_a_id: str | None = None
+    person_a_name: str | None = None
+    person_b_id: str | None = None
+    person_b_name: str | None = None
+    confidence: float = 0.0
+    reason: str | None = None
+    proposed_data: dict | None = None
+    status: str = "pending"
+    created_at: str | None = None
+
+
+class HygieneListResponse(BaseModel):
+    issues: list[HygieneIssueResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class HygieneStatsResponse(BaseModel):
+    total_pending: int = 0
+    by_type: dict[str, int] = Field(default_factory=dict)
+    total_resolved: int = 0
+
+
+class HygieneActionRequest(BaseModel):
+    notes: str = ""
+
+
+@router.get("/hygiene", response_model=HygieneListResponse)
+async def list_hygiene_issues(
+    status: str = Query("pending"),
+    action_type: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+) -> HygieneListResponse:
+    """Pending hygiene issues with person names joined."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return HygieneListResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        query = """
+            SELECT hq.id, hq.action_type, hq.person_a_id, hq.person_b_id,
+                   hq.confidence, hq.reason, hq.proposed_data, hq.status, hq.created_at,
+                   pa.canonical_name AS person_a_name,
+                   pb.canonical_name AS person_b_name
+            FROM hygiene_queue hq
+            LEFT JOIN people pa ON pa.id = hq.person_a_id
+            LEFT JOIN people pb ON pb.id = hq.person_b_id
+            WHERE hq.status = ?
+        """
+        params: list[Any] = [status]
+
+        if action_type:
+            query += " AND hq.action_type = ?"
+            params.append(action_type)
+
+        query += " ORDER BY hq.confidence DESC, hq.created_at DESC LIMIT ?"
+        params.append(limit)
+
+        rows = conn.execute(query, params).fetchall()
+
+        issues = []
+        for r in rows:
+            proposed = None
+            if r.get("proposed_data"):
+                try:
+                    import json
+                    proposed = json.loads(r["proposed_data"])
+                except (json.JSONDecodeError, TypeError):
+                    proposed = None
+
+            created_at = None
+            if r.get("created_at"):
+                try:
+                    from datetime import datetime
+                    created_at = datetime.fromtimestamp(r["created_at"]).isoformat()
+                except (ValueError, TypeError, OSError):
+                    created_at = str(r["created_at"])
+
+            issues.append(HygieneIssueResponse(
+                id=r["id"],
+                action_type=r["action_type"],
+                person_a_id=r.get("person_a_id"),
+                person_a_name=r.get("person_a_name"),
+                person_b_id=r.get("person_b_id"),
+                person_b_name=r.get("person_b_name"),
+                confidence=r.get("confidence", 0.0),
+                reason=r.get("reason"),
+                proposed_data=proposed,
+                status=r.get("status", "pending"),
+                created_at=created_at,
+            ))
+        return HygieneListResponse(issues=issues, total=len(issues))
+    except Exception:
+        logger.exception("Failed to list hygiene issues")
+        return HygieneListResponse()
+    finally:
+        conn.close()
+
+
+@router.get("/hygiene/stats", response_model=HygieneStatsResponse)
+async def get_hygiene_stats() -> HygieneStatsResponse:
+    """Counts by type and status."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return HygieneStatsResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        pending = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM hygiene_queue WHERE status = 'pending'"
+        ).fetchone()["cnt"]
+
+        by_type_rows = conn.execute(
+            "SELECT action_type, COUNT(*) AS cnt FROM hygiene_queue WHERE status = 'pending' GROUP BY action_type"
+        ).fetchall()
+        by_type = {r["action_type"]: r["cnt"] for r in by_type_rows}
+
+        resolved = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM hygiene_queue WHERE status IN ('approved', 'rejected')"
+        ).fetchone()["cnt"]
+
+        return HygieneStatsResponse(
+            total_pending=pending,
+            by_type=by_type,
+            total_resolved=resolved,
+        )
+    except Exception:
+        logger.exception("Failed to get hygiene stats")
+        return HygieneStatsResponse()
+    finally:
+        conn.close()
+
+
+@router.post("/hygiene/{issue_id}/approve")
+async def approve_hygiene_issue(issue_id: str) -> JSONResponse:
+    """Approve a hygiene issue. For merges, executes the merge."""
+    import sys
+
+    sys.path.insert(0, str(FilePath.home() / "aos" / "core" / "engine" / "people"))
+    try:
+        from hygiene import HygieneEngine
+        engine = HygieneEngine()
+        result = engine.approve_issue(issue_id)
+        return JSONResponse({"ok": True, "result": result})
+    except Exception as e:
+        logger.exception("Failed to approve hygiene issue %s", issue_id)
+        return JSONResponse({"error": f"Approval failed: {e}"}, status_code=500)
+
+
+@router.post("/hygiene/{issue_id}/reject")
+async def reject_hygiene_issue(issue_id: str, body: HygieneActionRequest) -> JSONResponse:
+    """Reject a hygiene issue with optional notes."""
+    import sys
+
+    sys.path.insert(0, str(FilePath.home() / "aos" / "core" / "engine" / "people"))
+    try:
+        from hygiene import HygieneEngine
+        engine = HygieneEngine()
+        result = engine.reject_issue(issue_id, notes=body.notes)
+        return JSONResponse({"ok": True, "result": result})
+    except Exception as e:
+        logger.exception("Failed to reject hygiene issue %s", issue_id)
+        return JSONResponse({"error": f"Rejection failed: {e}"}, status_code=500)
+
+
+@router.post("/hygiene/run")
+async def run_hygiene_scan() -> JSONResponse:
+    """Trigger a full hygiene scan and auto-fix tier-1 issues."""
+    import sys
+
+    sys.path.insert(0, str(FilePath.home() / "aos" / "core" / "engine" / "people"))
+    try:
+        from hygiene import HygieneEngine
+        engine = HygieneEngine()
+        scan_results = engine.scan_all()
+        fix_results = engine.run_tier1_fixes()
+        return JSONResponse({
+            "ok": True,
+            "scan": scan_results,
+            "fixes": fix_results,
+        })
+    except Exception as e:
+        logger.exception("Failed to run hygiene scan")
+        return JSONResponse({"error": f"Scan failed: {e}"}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Organizations — inferred org memberships
+# ---------------------------------------------------------------------------
+
+
+class OrgResponse(BaseModel):
+    id: str
+    name: str
+    type: str | None = None
+    domain: str | None = None
+    industry: str | None = None
+    city: str | None = None
+    member_count: int = 0
+
+
+class OrgListResponse(BaseModel):
+    organizations: list[OrgResponse] = Field(default_factory=list)
+    total: int = 0
+
+
+class OrgMemberResponse(BaseModel):
+    person_id: str
+    name: str
+    role: str | None = None
+    department: str | None = None
+    importance: int = 3
+
+
+class OrgDetailResponse(BaseModel):
+    organization: OrgResponse
+    members: list[OrgMemberResponse] = Field(default_factory=list)
+
+
+@router.get("/orgs", response_model=OrgListResponse)
+async def list_organizations() -> OrgListResponse:
+    """All organizations with member counts."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return OrgListResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        rows = conn.execute("""
+            SELECT o.id, o.name, o.type, o.domain, o.industry, o.city,
+                   COUNT(om.person_id) AS member_count
+            FROM organization o
+            LEFT JOIN membership om ON om.org_id = o.id
+            GROUP BY o.id
+            ORDER BY member_count DESC
+        """).fetchall()
+
+        orgs = [
+            OrgResponse(
+                id=r["id"],
+                name=r["name"],
+                type=r.get("type"),
+                domain=r.get("domain"),
+                industry=r.get("industry"),
+                city=r.get("city"),
+                member_count=r["member_count"],
+            )
+            for r in rows
+        ]
+        return OrgListResponse(organizations=orgs, total=len(orgs))
+    except Exception:
+        logger.exception("Failed to list organizations")
+        return OrgListResponse()
+    finally:
+        conn.close()
+
+
+@router.get("/orgs/{org_id}", response_model=OrgDetailResponse)
+async def get_organization(org_id: str) -> OrgDetailResponse | JSONResponse:
+    """Organization details with members ordered by seniority."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return JSONResponse({"error": "People database not found"}, status_code=404)
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        row = conn.execute("""
+            SELECT o.id, o.name, o.type, o.domain, o.industry, o.city,
+                   COUNT(om.person_id) AS member_count
+            FROM organization o
+            LEFT JOIN membership om ON om.org_id = o.id
+            WHERE o.id = ?
+            GROUP BY o.id
+        """, (org_id,)).fetchone()
+
+        if not row:
+            return JSONResponse({"error": f"Organization not found: {org_id}"}, status_code=404)
+
+        org = OrgResponse(
+            id=row["id"],
+            name=row["name"],
+            type=row.get("type"),
+            domain=row.get("domain"),
+            industry=row.get("industry"),
+            city=row.get("city"),
+            member_count=row["member_count"],
+        )
+
+        members_rows = conn.execute("""
+            SELECT om.person_id, p.canonical_name AS name, om.role, om.department,
+                   p.importance
+            FROM membership om
+            JOIN people p ON p.id = om.person_id
+            WHERE om.org_id = ?
+            ORDER BY p.importance ASC, p.canonical_name ASC
+        """, (org_id,)).fetchall()
+
+        members = [
+            OrgMemberResponse(
+                person_id=m["person_id"],
+                name=m["name"] or "Unknown",
+                role=m.get("role"),
+                department=m.get("department"),
+                importance=m.get("importance", 3),
+            )
+            for m in members_rows
+        ]
+
+        return OrgDetailResponse(organization=org, members=members)
+    except Exception:
+        logger.exception("Failed to get organization %s", org_id)
+        return JSONResponse({"error": "Failed to load organization"}, status_code=500)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Family Tree — family-only relationship edges for visualization
+# ---------------------------------------------------------------------------
+
+
+class FamilyEdge(BaseModel):
+    source_id: str
+    source_name: str
+    target_id: str
+    target_name: str
+    relationship: str  # spouse, parent, child, sibling
+
+
+class FamilyTreeResponse(BaseModel):
+    edges: list[FamilyEdge] = Field(default_factory=list)
+    total: int = 0
+
+
+@router.get("/graph/family", response_model=FamilyTreeResponse)
+async def get_family_tree() -> FamilyTreeResponse:
+    """Family-only relationship edges for tree visualization."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return FamilyTreeResponse()
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        rows = conn.execute("""
+            SELECT r.person_a_id AS source_id, pa.canonical_name AS source_name,
+                   r.person_b_id AS target_id, pb.canonical_name AS target_name,
+                   r.subtype AS relationship
+            FROM relationships r
+            JOIN people pa ON pa.id = r.person_a_id
+            JOIN people pb ON pb.id = r.person_b_id
+            WHERE r.type = 'family'
+            ORDER BY pa.canonical_name ASC
+        """).fetchall()
+
+        edges = [
+            FamilyEdge(
+                source_id=r["source_id"],
+                source_name=r["source_name"] or "Unknown",
+                target_id=r["target_id"],
+                target_name=r["target_name"] or "Unknown",
+                relationship=r.get("relationship") or "family",
+            )
+            for r in rows
+        ]
+        return FamilyTreeResponse(edges=edges, total=len(edges))
+    except Exception:
+        logger.exception("Failed to build family tree")
+        return FamilyTreeResponse()
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Person Circles — circles a specific person belongs to
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{person_id}/circles")
+async def get_person_circles(person_id: str) -> JSONResponse:
+    """Circles a person belongs to."""
+    import sqlite3
+
+    people_db = FilePath.home() / ".aos" / "data" / "people.db"
+    if not people_db.exists():
+        return JSONResponse({"circles": [], "total": 0})
+
+    conn = sqlite3.connect(str(people_db))
+    conn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+
+    try:
+        rows = conn.execute("""
+            SELECT c.id, c.name, c.category, c.subcategory, c.source, c.confidence,
+                   cm.role AS role_in_circle, cm.confidence AS membership_confidence
+            FROM circle_membership cm
+            JOIN circle c ON c.id = cm.circle_id
+            WHERE cm.person_id = ?
+            ORDER BY c.name ASC
+        """, (person_id,)).fetchall()
+
+        circles = [
+            {
+                "id": r["id"],
+                "name": r["name"],
+                "category": r.get("category"),
+                "subcategory": r.get("subcategory"),
+                "source": r.get("source"),
+                "confidence": r.get("confidence", 1.0),
+                "role_in_circle": r.get("role_in_circle"),
+                "membership_confidence": r.get("membership_confidence", 1.0),
+            }
+            for r in rows
+        ]
+        return JSONResponse({"circles": circles, "total": len(circles)})
+    except Exception:
+        logger.exception("Failed to get circles for person %s", person_id)
+        return JSONResponse({"circles": [], "total": 0})
+    finally:
+        conn.close()
+
+
 @router.get("/surfaces", response_model=PersonSurfaceResponse)
 async def get_surfaces(request: Request) -> PersonSurfaceResponse:
     """Smarter surfacing — who needs attention and why."""
@@ -845,7 +1586,7 @@ async def get_surfaces(request: Request) -> PersonSurfaceResponse:
             relationship_trend=row.get("trajectory"),
             projects=[],
             organization=row.get("organization"),
-            role=row.get("role"),
+            role=row.get("job_title"),
         )
 
     def _add(row, reason: str, urgency: int, action: str | None = None):
@@ -867,7 +1608,7 @@ async def get_surfaces(request: Request) -> PersonSurfaceResponse:
                    rs.trajectory, rs.days_since_contact AS days_since,
                    rs.avg_days_between, rs.inbound_30d, rs.outbound_30d,
                    rs.interaction_count_30d, rs.interaction_count_90d,
-                   cm.organization, cm.role
+                   cm.organization, cm.job_title
             FROM people p
             JOIN relationship_state rs ON rs.person_id = p.id
             LEFT JOIN contact_metadata cm ON cm.person_id = p.id
@@ -893,7 +1634,7 @@ async def get_surfaces(request: Request) -> PersonSurfaceResponse:
                    rs.trajectory, rs.days_since_contact AS days_since,
                    rs.avg_days_between, rs.inbound_30d, rs.outbound_30d,
                    rs.interaction_count_30d, rs.interaction_count_90d,
-                   cm.organization, cm.role
+                   cm.organization, cm.job_title
             FROM people p
             JOIN relationship_state rs ON rs.person_id = p.id
             LEFT JOIN contact_metadata cm ON cm.person_id = p.id
@@ -914,7 +1655,7 @@ async def get_surfaces(request: Request) -> PersonSurfaceResponse:
                    rs.trajectory, rs.days_since_contact AS days_since,
                    rs.avg_days_between, rs.inbound_30d, rs.outbound_30d,
                    rs.interaction_count_30d, rs.interaction_count_90d,
-                   cm.organization, cm.role
+                   cm.organization, cm.job_title
             FROM people p
             JOIN relationship_state rs ON rs.person_id = p.id
             LEFT JOIN contact_metadata cm ON cm.person_id = p.id
@@ -936,7 +1677,7 @@ async def get_surfaces(request: Request) -> PersonSurfaceResponse:
                    rs.trajectory, rs.days_since_contact AS days_since,
                    rs.avg_days_between, rs.inbound_30d, rs.outbound_30d,
                    rs.interaction_count_30d, rs.interaction_count_90d,
-                   cm.organization, cm.role
+                   cm.organization, cm.job_title
             FROM people p
             JOIN relationship_state rs ON rs.person_id = p.id
             LEFT JOIN contact_metadata cm ON cm.person_id = p.id
@@ -1303,6 +2044,13 @@ def _fetch_messages_from_adapters(
 
     Returns (messages, presence) tuple.
     """
+    import sys, os
+    # Add the AOS root (parent of core/) so "from core.engine..." imports work
+    # Works regardless of whether cwd is ~/aos/core or ~/project/aos/core
+    _this_dir = FilePath(__file__).resolve().parent  # qareen/api/
+    _aos_root = str(_this_dir.parent.parent.parent)  # up from qareen/api/ → qareen/ → core/ → aos root
+    if _aos_root not in sys.path:
+        sys.path.insert(0, _aos_root)
     from datetime import datetime, timedelta
 
     since = datetime.now() - timedelta(days=days)
@@ -1311,6 +2059,12 @@ def _fetch_messages_from_adapters(
 
     # WhatsApp — try local adapter first (has full history), fallback to bridge
     wa_jid = channel_ids.get("whatsapp")
+    if wa_jid:
+        # Normalize JID: @status → @s.whatsapp.net for messaging queries
+        if "@status" in wa_jid:
+            wa_jid = wa_jid.replace("@status", "@s.whatsapp.net")
+        elif "@lid" in wa_jid:
+            pass  # @lid JIDs work as-is in the local adapter
     if wa_jid:
         try:
             from core.engine.comms.channels.whatsapp_local import WhatsAppLocalAdapter
@@ -1372,35 +2126,88 @@ def _fetch_messages_from_adapters(
             im = iMessageAdapter()
             if im.is_available():
                 # Resolve phone/email to a chat ROWID
-                # The adapter expects c.rowid, so we query chat.db to find it
                 normalized = "+" + "".join(c for c in imsg_identifier if c.isdigit()) if phone else imsg_identifier
                 chat_rowid = _resolve_imessage_chat(normalized)
                 if chat_rowid:
                     msgs = im.get_messages(conversation_id=str(chat_rowid), since=since, limit=limit)
-                last_ts = None
-                for m in msgs:
-                    ts = m.timestamp.isoformat() if m.timestamp else None
-                    if ts and (last_ts is None or ts > last_ts):
-                        last_ts = ts
-                    all_messages.append(ChannelMessageSchema(
-                        id=m.id,
-                        channel="imessage",
-                        sender="me" if m.from_me else m.sender,
-                        text=m.text or "",
-                        timestamp=ts,
-                        from_me=m.from_me,
-                        media_type=m.media_type,
-                        has_media=m.has_media,
-                    ))
-                if msgs:
-                    presence.append(ChannelPresence(
-                        channel="imessage",
-                        identifier=phone,
-                        last_message_at=last_ts,
-                        available=True,
-                    ))
+                    last_ts = None
+                    for m in msgs:
+                        ts = m.timestamp.isoformat() if m.timestamp else None
+                        if ts and (last_ts is None or ts > last_ts):
+                            last_ts = ts
+                        all_messages.append(ChannelMessageSchema(
+                            id=m.id,
+                            channel="imessage",
+                            sender="me" if m.from_me else m.sender,
+                            text=m.text or "",
+                            timestamp=ts,
+                            from_me=m.from_me,
+                            media_type=m.media_type,
+                            has_media=m.has_media,
+                        ))
+                    if msgs:
+                        presence.append(ChannelPresence(
+                            channel="imessage",
+                            identifier=phone,
+                            last_message_at=last_ts,
+                            available=True,
+                        ))
         except Exception as e:
-            logger.warning("iMessage adapter failed: %s", e)
+            logger.warning("iMessage adapter failed for %s: %s", imsg_identifier, e, exc_info=True)
+
+    # Supplement with interaction summaries from people.db (covers channels where live adapters lack FDA)
+    if True:
+        try:
+            people_db_path = FilePath.home() / ".aos" / "data" / "people.db"
+            if people_db_path.exists():
+                import sqlite3 as _sql
+                pconn = _sql.connect(str(people_db_path))
+                pconn.row_factory = lambda c, r: dict(zip([col[0] for col in c.description], r))
+                # Find person_id from any channel identifier
+                pid = None
+                for ch_val in channel_ids.values():
+                    digits = "".join(c for c in ch_val if c.isdigit())
+                    row = pconn.execute(
+                        "SELECT person_id FROM person_identifiers WHERE normalized LIKE ? LIMIT 1",
+                        (f"%{digits}%",),
+                    ).fetchone()
+                    if row:
+                        pid = row["person_id"]
+                        break
+                if pid:
+                    # Skip channels that already have live messages
+                    live_channels = {m.channel for m in all_messages}
+                    cutoff = int((datetime.now() - timedelta(days=days)).timestamp())
+                    interactions = pconn.execute(
+                        """SELECT id, channel, direction, msg_count, occurred_at, summary
+                           FROM interactions
+                           WHERE person_id = ? AND occurred_at >= ?
+                           ORDER BY occurred_at DESC LIMIT ?""",
+                        (pid, cutoff, limit),
+                    ).fetchall()
+                    for ix in interactions:
+                        if ix["channel"] in live_channels:
+                            continue
+                        ts_dt = datetime.fromtimestamp(ix["occurred_at"]) if ix["occurred_at"] else None
+                        ts_str = ts_dt.isoformat() if ts_dt else None
+                        all_messages.append(ChannelMessageSchema(
+                            id=ix["id"],
+                            channel=ix["channel"] or "unknown",
+                            sender="me" if ix["direction"] == "outbound" else "them",
+                            text=ix.get("summary") or f"{ix['msg_count']} messages ({ix['direction']})",
+                            timestamp=ts_str,
+                            from_me=ix["direction"] == "outbound",
+                            media_type="summary",
+                            has_media=False,
+                        ))
+                        ch = ix["channel"] or "unknown"
+                        if not any(p.channel == ch for p in presence):
+                            presence.append(ChannelPresence(
+                                channel=ch, identifier=ch_val, last_message_at=ts_str, available=False,
+                            ))
+                pconn.close()
+        except Exception:
+            logger.warning("Fallback interaction lookup failed", exc_info=True)
 
     # Sort all messages by timestamp descending
     all_messages.sort(key=lambda m: m.timestamp or "", reverse=True)
