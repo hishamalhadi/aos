@@ -378,6 +378,96 @@ class AgentResponse(BaseModel):
 
     schedule: dict[str, str] = Field(default_factory=dict, description="Scheduled tasks")
 
+    # Permissions & execution
+    permission_mode: str = Field("default", description="bypassPermissions, default, or plan")
+    max_turns: int | None = Field(None, description="Max conversation turns")
+    effort: str = Field("", description="Reasoning effort: low, medium, high, max")
+
+    # Orchestration
+    can_spawn: list[str] = Field(default_factory=list, description="Agent IDs this agent can dispatch")
+    disallowed_tools: list[str] = Field(default_factory=list, description="Tools to deny")
+    isolation: str = Field("", description="none or worktree")
+    background: bool = Field(False, description="Run in background by default")
+    memory: str = Field("", description="Persistent memory scope: user, project, local")
+
+    # Context & dependencies
+    rules: list[str] = Field(default_factory=list, description="Rule files to load")
+    parameters: dict[str, Any] = Field(default_factory=dict, description="Operator-tunable config")
+    services: list[str] = Field(default_factory=list, description="AOS service dependencies")
+    prerequisites: list[str] = Field(default_factory=list, description="Preflight checks")
+
+    # Failure & data flow
+    on_failure: str = Field("escalate", description="escalate, retry, or degrade")
+    max_retries: int = Field(0, description="Max retries on failure")
+    inputs: list[str] = Field(default_factory=list, description="Data consumed")
+    outputs: list[str] = Field(default_factory=list, description="Data produced")
+
+    # Metadata
+    self_contained: bool = Field(False, description="Can run without external deps")
+    version: str = Field("1.0", description="Agent version")
+    body: str | None = Field(None, description="System prompt body (config endpoint only)")
+
+
+class UpdateAgentConfigRequest(BaseModel):
+    """Partial update for agent config. All fields optional."""
+
+    name: str | None = Field(None, description="Display name")
+    role: str | None = Field(None, description="Agent role title")
+    domain: str | None = Field(None, description="Agent's domain of expertise")
+    description: str | None = Field(None, description="What this agent does")
+    model: str | None = Field(None, description="LLM model used")
+    color: str | None = Field(None, description="Brand color hex")
+    initials: str | None = Field(None, description="Two-letter display initials")
+
+    tools: list[str] | None = Field(None, description="Available tools")
+    skills: list[str] | None = Field(None, description="Available skills")
+    mcp_servers: list[str] | None = Field(None, description="Connected MCP servers")
+
+    default_trust: int | None = Field(None, description="Default trust level")
+    scope: str | None = Field(None, description="global or project")
+    reports_to: str | None = Field(None, description="Parent agent ID in hierarchy")
+
+    schedule: dict[str, str] | None = Field(None, description="Scheduled tasks")
+
+    permission_mode: str | None = Field(None, description="bypassPermissions, default, or plan")
+    max_turns: int | None = Field(None, description="Max conversation turns")
+    effort: str | None = Field(None, description="Reasoning effort: low, medium, high, max")
+
+    can_spawn: list[str] | None = Field(None, description="Agent IDs this agent can dispatch")
+    disallowed_tools: list[str] | None = Field(None, description="Tools to deny")
+    isolation: str | None = Field(None, description="none or worktree")
+    background: bool | None = Field(None, description="Run in background by default")
+    memory: str | None = Field(None, description="Persistent memory scope: user, project, local")
+
+    rules: list[str] | None = Field(None, description="Rule files to load")
+    parameters: dict[str, Any] | None = Field(None, description="Operator-tunable config")
+    services: list[str] | None = Field(None, description="AOS service dependencies")
+    prerequisites: list[str] | None = Field(None, description="Preflight checks")
+
+    on_failure: str | None = Field(None, description="escalate, retry, or degrade")
+    max_retries: int | None = Field(None, description="Max retries on failure")
+    inputs: list[str] | None = Field(None, description="Data consumed")
+    outputs: list[str] | None = Field(None, description="Data produced")
+
+    self_contained: bool | None = Field(None, description="Can run without external deps")
+    version: str | None = Field(None, description="Agent version")
+    body: str | None = Field(None, description="System prompt body")
+
+
+class AgentOptionsResponse(BaseModel):
+    """Options list for agent config dropdowns."""
+
+    items: list[str] = Field(default_factory=list)
+    total: int = Field(0)
+
+
+class AgentHealthResponse(BaseModel):
+    """Health check result for an agent's dependencies."""
+
+    agent_id: str
+    healthy: bool = Field(True)
+    checks: list[dict[str, Any]] = Field(default_factory=list)
+
 
 class AgentListResponse(BaseModel):
     """List of all agents."""
