@@ -4,7 +4,7 @@ import {
   ListTodo, Library, Users, Bot, Bell,
   Activity, Settings, Mic, MessageSquare, Zap,
   Menu, Search, Sun, Moon, X,
-  BookOpen, CalendarDays, ScrollText,
+  BookOpen, CalendarDays, ScrollText, Radar,
   ShieldCheck, Network, Sparkles, Plug,
   type LucideIcon,
 } from 'lucide-react';
@@ -45,6 +45,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Vault',
     items: [
+      { label: 'Intelligence', href: '/intelligence', icon: Radar },
       { label: 'Knowledge', href: '/vault/knowledge', icon: BookOpen },
       { label: 'Logs', href: '/vault/logs', icon: ScrollText },
     ],

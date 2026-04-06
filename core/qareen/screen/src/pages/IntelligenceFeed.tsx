@@ -1,17 +1,29 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Rss } from 'lucide-react';
-import { useIntelligenceFeed, useIntelligenceStats } from '@/hooks/useIntelligence';
-import type { IntelligenceItem } from '@/hooks/useIntelligence';
 import { Tag, type TagColor } from '@/components/primitives/Tag';
 import { StatusDot } from '@/components/primitives/StatusDot';
 import { EmptyState } from '@/components/primitives/EmptyState';
-import { ErrorBanner } from '@/components/primitives/ErrorBanner';
 import { Skeleton } from '@/components/primitives/Skeleton';
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Types + helpers
 // ---------------------------------------------------------------------------
+
+interface FeedItem {
+  id: string;
+  title: string;
+  summary: string | null;
+  content: string | null;
+  url: string;
+  author: string | null;
+  platform: string;
+  source_name: string;
+  published_at: string;
+  relevance_score: number;
+  relevance_tags: string[];
+  status: string;
+}
 
 function timeAgo(iso: string | undefined | null): string {
   if (!iso) return '';
@@ -22,237 +34,178 @@ function timeAgo(iso: string | undefined | null): string {
   const hours = Math.floor(mins / 60);
   if (hours < 24) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
-  if (days < 7) return `${days}d ago`;
-  if (days < 30) return `${Math.floor(days / 7)}w ago`;
-  return `${Math.floor(days / 30)}mo ago`;
+  return `${days}d ago`;
 }
 
-const platformTagColor: Record<string, TagColor> = {
-  twitter: 'blue',
-  youtube: 'red',
-  github: 'gray',
-  hackernews: 'orange',
-  blog: 'purple',
-  arxiv: 'green',
-  reddit: 'orange',
-  rss: 'teal',
+const platformColor: Record<string, TagColor> = {
+  twitter: 'blue', youtube: 'red', github: 'gray',
+  hackernews: 'orange', blog: 'purple', arxiv: 'green',
 };
 
-const PLATFORMS = ['All', 'Twitter', 'YouTube', 'GitHub', 'HN', 'Blogs', 'arXiv'] as const;
-
-const platformFilterMap: Record<string, string | undefined> = {
-  All: undefined,
-  Twitter: 'twitter',
-  YouTube: 'youtube',
-  GitHub: 'github',
-  HN: 'hackernews',
-  Blogs: 'blog',
-  arXiv: 'arxiv',
-};
+const FILTERS = [
+  { label: 'All', value: '' },
+  { label: 'Twitter', value: 'twitter' },
+  { label: 'YouTube', value: 'youtube' },
+  { label: 'GitHub', value: 'github' },
+  { label: 'HN', value: 'hackernews' },
+  { label: 'Blogs', value: 'blog' },
+  { label: 'arXiv', value: 'arxiv' },
+];
 
 // ---------------------------------------------------------------------------
-// IntelligenceCard
-// ---------------------------------------------------------------------------
-
-function IntelligenceCard({
-  item,
-  onClick,
-}: {
-  item: IntelligenceItem;
-  onClick: () => void;
-}) {
-  const platformColor = platformTagColor[item.platform] || 'gray';
-
-  return (
-    <button
-      onClick={onClick}
-      className="
-        w-full text-left px-4 py-3.5
-        bg-bg-secondary border border-border rounded-lg
-        hover:border-border-secondary
-        transition-colors cursor-pointer group
-      "
-      style={{ transitionDuration: 'var(--duration-instant)' }}
-    >
-      {/* Top row: platform + author + time */}
-      <div className="flex items-center gap-2 mb-1.5">
-        {item.status === 'unread' && <StatusDot color="blue" size="sm" />}
-        <Tag label={item.platform} color={platformColor} size="sm" />
-        {item.author && (
-          <span className="text-[11px] font-[510] text-text-tertiary truncate">
-            {item.author}
-          </span>
-        )}
-        <span className="text-[10px] text-text-quaternary font-mono ml-auto shrink-0">
-          {timeAgo(item.published_at)}
-        </span>
-      </div>
-
-      {/* Title */}
-      <p className="text-[14px] font-[510] text-text-secondary group-hover:text-text transition-colors leading-snug mb-1" style={{ transitionDuration: 'var(--duration-instant)' }}>
-        {item.title}
-      </p>
-
-      {/* Summary */}
-      {item.summary && (
-        <p className="text-[12px] text-text-quaternary line-clamp-2 leading-relaxed mb-2">
-          {item.summary}
-        </p>
-      )}
-
-      {/* Bottom row: tags + score */}
-      <div className="flex items-center gap-1.5 flex-wrap">
-        {item.relevance_tags.slice(0, 4).map(tag => (
-          <span
-            key={tag}
-            className="inline-flex items-center h-[18px] px-1.5 rounded-xs text-[10px] bg-bg-tertiary text-text-tertiary"
-          >
-            {tag}
-          </span>
-        ))}
-        <span className="ml-auto text-[10px] font-mono text-text-quaternary shrink-0">
-          {item.relevance_score.toFixed(1)}
-        </span>
-      </div>
-    </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Loading skeleton
-// ---------------------------------------------------------------------------
-
-function FeedSkeleton() {
-  return (
-    <div className="space-y-2">
-      {Array.from({ length: 5 }).map((_, i) => (
-        <div key={i} className="bg-bg-secondary border border-border rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Skeleton className="h-5 w-14 rounded-xs" />
-            <Skeleton className="h-3 w-20" />
-            <div className="flex-1" />
-            <Skeleton className="h-3 w-12" />
-          </div>
-          <Skeleton className="h-4 w-3/4 mb-1.5" />
-          <Skeleton className="h-3 w-full mb-1" />
-          <Skeleton className="h-3 w-2/3 mb-2.5" />
-          <div className="flex gap-1.5">
-            <Skeleton className="h-[18px] w-12 rounded-xs" />
-            <Skeleton className="h-[18px] w-16 rounded-xs" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Feed page
+// Page
 // ---------------------------------------------------------------------------
 
 export default function IntelligenceFeed() {
   const navigate = useNavigate();
-  const [activePlatform, setActivePlatform] = useState<string>('All');
+  const [items, setItems] = useState<FeedItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [platform, setPlatform] = useState('');
   const [search, setSearch] = useState('');
-  const [searchDebounced, setSearchDebounced] = useState('');
+  const [stats, setStats] = useState<{ total_items: number; unread_count: number; active_sources: number } | null>(null);
 
-  // Debounce search
-  const handleSearch = (value: string) => {
-    setSearch(value);
-    clearTimeout((window as any).__intelSearchTimer);
-    (window as any).__intelSearchTimer = setTimeout(() => setSearchDebounced(value), 300);
-  };
+  // Fetch feed
+  useEffect(() => {
+    setLoading(true);
+    const params = new URLSearchParams();
+    params.set('days', '30');
+    params.set('limit', '100');
+    if (platform) params.set('platform', platform);
+    if (search) params.set('search', search);
 
-  const platformFilter = platformFilterMap[activePlatform];
-  const { data, isLoading, isError } = useIntelligenceFeed(
-    7,
-    100,
-    platformFilter,
-    undefined,
-    searchDebounced || undefined,
-  );
-  const { data: stats } = useIntelligenceStats();
+    fetch(`/api/intelligence/feed?${params}`)
+      .then(r => r.json())
+      .then(data => {
+        setItems(data.items || []);
+        setLoading(false);
+      })
+      .catch(e => {
+        setError(e.message);
+        setLoading(false);
+      });
+  }, [platform, search]);
 
-  const items = data?.items ?? [];
+  // Fetch stats
+  useEffect(() => {
+    fetch('/api/intelligence/stats')
+      .then(r => r.json())
+      .then(setStats)
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-[720px] mx-auto px-6 pt-10 pb-16">
-        {/* Stats bar */}
+
+        {/* Stats */}
         {stats && (
-          <div className="flex items-center gap-3 mb-6 text-[11px] text-text-quaternary font-mono">
-            <span className="tabular-nums">{stats.total_items} items</span>
+          <div className="flex items-center gap-3 mb-6 text-[11px] text-text-quaternary font-mono tabular-nums">
+            <span>{stats.total_items} items</span>
             <span className="w-px h-3 bg-border" />
-            <span className="tabular-nums">{stats.unread_count} unread</span>
+            <span>{stats.unread_count} unread</span>
             <span className="w-px h-3 bg-border" />
-            <span className="tabular-nums">{stats.active_sources} sources</span>
+            <span>{stats.active_sources} sources</span>
           </div>
         )}
 
-        {/* Filter pills + search */}
+        {/* Filter pills */}
         <div className="flex items-center gap-2 mb-6 flex-wrap">
-          {PLATFORMS.map(platform => (
+          {FILTERS.map(f => (
             <button
-              key={platform}
-              onClick={() => setActivePlatform(platform)}
-              className={`
-                h-7 px-3 rounded-full text-[11px] font-[510] cursor-pointer
-                transition-all
-                ${activePlatform === platform
+              key={f.value}
+              onClick={() => setPlatform(f.value)}
+              className={`h-7 px-3 rounded-full text-[11px] font-medium cursor-pointer transition-colors duration-75
+                ${platform === f.value
                   ? 'bg-accent text-white'
-                  : 'text-text-quaternary hover:text-text-tertiary hover:bg-hover border border-transparent'}
-              `}
-              style={{ transitionDuration: 'var(--duration-instant)' }}
+                  : 'text-text-quaternary hover:text-text-tertiary hover:bg-hover'}`}
             >
-              {platform}
+              {f.label}
             </button>
           ))}
-
           <div className="flex-1" />
-
-          <div className="relative max-w-[220px] w-full">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-text-quaternary" />
+          <div className="relative max-w-[200px] w-full">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-text-quaternary pointer-events-none" />
             <input
               type="text"
               value={search}
-              onChange={e => handleSearch(e.target.value)}
+              onChange={e => setSearch(e.target.value)}
               placeholder="Search..."
-              className="
-                w-full h-7 pl-7 pr-3
-                bg-transparent border border-border rounded-full
-                text-[11px] text-text-secondary placeholder:text-text-quaternary
-                focus:border-border-secondary focus:outline-none
-                transition-colors
-              "
-              style={{ transitionDuration: 'var(--duration-fast)' }}
+              className="w-full h-7 pl-7 pr-3 bg-transparent border border-border rounded-full text-[11px] text-text-secondary placeholder:text-text-quaternary focus:border-border-secondary focus:outline-none transition-colors duration-75"
             />
           </div>
         </div>
 
         {/* Error */}
-        {isError && <ErrorBanner message="Failed to load intelligence feed." />}
+        {error && <p className="text-red text-[12px] mb-4">{error}</p>}
 
         {/* Loading */}
-        {isLoading && <FeedSkeleton />}
+        {loading && (
+          <div className="space-y-2">
+            {[1,2,3,4,5].map(i => (
+              <div key={i} className="bg-bg-secondary border border-border rounded-lg p-4">
+                <Skeleton className="h-4 w-3/4 mb-2" />
+                <Skeleton className="h-3 w-full mb-1" />
+                <Skeleton className="h-3 w-2/3" />
+              </div>
+            ))}
+          </div>
+        )}
 
         {/* Empty */}
-        {!isLoading && !isError && items.length === 0 && (
+        {!loading && !error && items.length === 0 && (
           <EmptyState
             icon={<Rss />}
-            title={search ? 'No items match your search' : 'No intelligence items yet'}
-            description={search ? 'Try a different query or clear filters.' : 'Items will appear here once sources are configured and ingested.'}
+            title="No intelligence items yet"
+            description="Items will appear here once sources are configured and ingested."
           />
         )}
 
-        {/* Feed cards */}
-        {!isLoading && items.length > 0 && (
+        {/* Feed */}
+        {!loading && items.length > 0 && (
           <div className="space-y-2">
             {items.map(item => (
-              <IntelligenceCard
+              <button
                 key={item.id}
-                item={item}
                 onClick={() => navigate(`/intelligence/${item.id}`)}
-              />
+                className="w-full text-left px-4 py-3.5 bg-bg-secondary border border-border rounded-lg hover:border-border-secondary transition-colors duration-75 cursor-pointer group"
+              >
+                {/* Row 1: platform + author + time */}
+                <div className="flex items-center gap-2 mb-1.5">
+                  {item.status === 'unread' && <StatusDot color="blue" size="sm" />}
+                  <Tag label={item.platform} color={platformColor[item.platform] || 'gray'} size="sm" />
+                  {item.author && (
+                    <span className="text-[11px] font-medium text-text-tertiary truncate">{item.author}</span>
+                  )}
+                  <span className="text-[10px] text-text-quaternary font-mono ml-auto shrink-0">
+                    {timeAgo(item.published_at)}
+                  </span>
+                </div>
+
+                {/* Row 2: title */}
+                <p className="text-[13px] font-medium text-text-secondary group-hover:text-text transition-colors duration-75 leading-snug mb-1">
+                  {item.title}
+                </p>
+
+                {/* Row 3: summary */}
+                {item.summary && (
+                  <p className="text-[12px] text-text-quaternary line-clamp-2 leading-relaxed mb-2">
+                    {item.summary}
+                  </p>
+                )}
+
+                {/* Row 4: tags + score */}
+                <div className="flex items-center gap-1.5">
+                  {(item.relevance_tags || []).slice(0, 3).map(tag => (
+                    <span key={tag} className="h-[18px] px-1.5 rounded-xs text-[10px] bg-bg-tertiary text-text-tertiary inline-flex items-center">
+                      {tag}
+                    </span>
+                  ))}
+                  <span className="ml-auto text-[10px] font-mono text-text-quaternary">
+                    {item.relevance_score.toFixed(1)}
+                  </span>
+                </div>
+              </button>
             ))}
           </div>
         )}
