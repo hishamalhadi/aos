@@ -3,7 +3,8 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from '@/components/layout/Layout';
 
 // ── Primary surfaces ──
-const Companion = lazy(() => import('@/pages/Companion'));
+const Home = lazy(() => import('@/pages/Companion'));
+const CompanionSession = lazy(() => import('@/pages/CompanionSession'));
 const Work = lazy(() => import('@/pages/Work'));
 const People = lazy(() => import('@/pages/People'));
 const Vault = lazy(() => import('@/pages/Vault'));
@@ -23,6 +24,9 @@ const SessionDetail = lazy(() => import('@/pages/SessionDetail'));
 const AutomationEditor = lazy(() => import('@/pages/AutomationEditor'));
 const AutomationArchitect = lazy(() => import('@/pages/AutomationArchitect'));
 const AgentConfig = lazy(() => import('@/pages/AgentConfig'));
+const IntelligenceFeed = lazy(() => import('@/pages/IntelligenceFeed'));
+const IntelligenceDetail = lazy(() => import('@/pages/IntelligenceDetail'));
+const IntelligenceSources = lazy(() => import('@/pages/IntelligenceSources'));
 
 // ── Review: pages with real UI, kept for evaluation ──
 const Meeting = lazy(() => import('@/pages/Meeting'));
@@ -34,7 +38,8 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         {/* ── Primary surfaces ── */}
-        <Route path="/" element={<Companion />} />
+        <Route path="/" element={<Home />} />
+        <Route path="/companion/session/:sessionId" element={<CompanionSession />} />
         <Route path="/work" element={<Work />} />
         <Route path="/people" element={<People />} />
         <Route path="/vault" element={<Vault />} />
@@ -51,6 +56,11 @@ export default function App() {
         <Route path="/skills" element={<Skills />} />
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/org" element={<Org />} />
+
+        {/* ── Intelligence feed ── */}
+        <Route path="/intelligence" element={<IntelligenceFeed />} />
+        <Route path="/intelligence/sources" element={<IntelligenceSources />} />
+        <Route path="/intelligence/:id" element={<IntelligenceDetail />} />
 
         {/* ── Sub-routes ── */}
         <Route path="/sessions" element={<Sessions />} />
