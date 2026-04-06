@@ -6,7 +6,11 @@ from pathlib import Path
 
 # Path to the crawler CLI, executed via the crawler venv's Python
 CRAWLER_VENV_PYTHON = Path.home() / ".aos" / "services" / "crawler" / ".venv" / "bin" / "python"
-CRAWLER_CLI = Path.home() / "aos" / "core" / "services" / "crawler" / "crawl_cli.py"
+
+# Resolve CLI path: try runtime (~/aos/) first, fall back to dev workspace (~/project/aos/)
+_RUNTIME_CLI = Path.home() / "aos" / "core" / "services" / "crawler" / "crawl_cli.py"
+_DEV_CLI = Path.home() / "project" / "aos" / "core" / "services" / "crawler" / "crawl_cli.py"
+CRAWLER_CLI = _RUNTIME_CLI if _RUNTIME_CLI.exists() else _DEV_CLI
 
 # Timeout per URL extraction
 EXTRACT_TIMEOUT = 30  # seconds
