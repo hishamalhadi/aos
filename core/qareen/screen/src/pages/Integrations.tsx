@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Cpu, Plug, KeyRound, Loader2, Check, X, AlertCircle, Plus, RefreshCw,
   Globe, Zap, Server, Cloud, HardDrive, ChevronDown, ChevronRight, Shield,
-  Activity,
+  Activity, Layers,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import {
@@ -26,10 +26,11 @@ const GLASS: React.CSSProperties = {
 };
 
 const TABS = [
-  { id: 'providers', label: 'Providers', icon: <Cpu className="w-3 h-3" /> },
-  { id: 'connectors', label: 'Connectors', icon: <Plug className="w-3 h-3" /> },
-  { id: 'credentials', label: 'Credentials', icon: <KeyRound className="w-3 h-3" /> },
-  { id: 'activity', label: 'Activity', icon: <Activity className="w-3 h-3" /> },
+  { id: 'services', label: 'Services' },
+  { id: 'providers', label: 'Providers' },
+  { id: 'connectors', label: 'Connectors' },
+  { id: 'credentials', label: 'Credentials' },
+  { id: 'activity', label: 'Activity' },
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
 
@@ -643,11 +644,370 @@ function ExecutionRow({ exec }: { exec: Execution }) {
 }
 
 // ============================================================
+// Services tab — unified service-centric view
+// ============================================================
+
+interface ServiceGroup {
+  id: string;
+  name: string;
+  connector: Connector | null;
+  credentials: Credential[];
+  status: string;
+  type: string;
+  color?: string;
+  capabilities: Array<{ id: string; label: string; description: string }>;
+  health: Array<{ name: string; status: string; detail: string; description?: string }>;
+}
+
+function useServices(connectors: Connector[], credentials: Credential[]): ServiceGroup[] {
+  return useMemo(() => {
+    // Map credential → service by inferring from used_by and name patterns
+    const credByService: Record<string, Credential[]> = {};
+    const assignedCreds = new Set<string>();
+
+    for (const cred of credentials) {
+      const providers = cred.used_by.providers ?? [];
+      const connectorIds = cred.used_by.connectors ?? [];
+      const targets = [...connectorIds, ...providers];
+
+      if (targets.length > 0) {
+        for (const t of targets) {
+          (credByService[t] ??= []).push(cred);
+          assignedCreds.add(cred.name);
+        }
+      } else {
+        // Infer service from credential name prefix
+        const prefix = cred.name.split('_')[0].toLowerCase();
+        if (prefix && prefix.length > 2) {
+          (credByService[prefix] ??= []).push(cred);
+          assignedCreds.add(cred.name);
+        }
+      }
+    }
+
+    // Build service groups from connectors
+    const services: ServiceGroup[] = [];
+    const seenIds = new Set<string>();
+
+    for (const conn of connectors) {
+      seenIds.add(conn.id);
+      const creds = credByService[conn.id] ?? [];
+      services.push({
+        id: conn.id,
+        name: conn.display_name,
+        connector: conn,
+        credentials: creds,
+        status: conn.status,
+        type: conn.type ?? 'unknown',
+        color: conn.color,
+        capabilities: conn.capabilities ?? [],
+        health: conn.health ?? [],
+      });
+    }
+
+    // Add credential-only services (no matching connector)
+    for (const [serviceId, creds] of Object.entries(credByService)) {
+      if (seenIds.has(serviceId)) continue;
+      // Check if any credential in this group has a connector match we missed
+      const name = serviceId.charAt(0).toUpperCase() + serviceId.slice(1);
+      const allPresent = creds.every(c => c.present);
+      services.push({
+        id: serviceId,
+        name,
+        connector: null,
+        credentials: creds,
+        status: allPresent ? 'keys-only' : 'incomplete',
+        type: 'credential',
+        capabilities: [],
+        health: [],
+      });
+    }
+
+    // Orphan credentials (not assigned to any service)
+    const orphans = credentials.filter(c => !assignedCreds.has(c.name));
+    if (orphans.length > 0) {
+      services.push({
+        id: '_orphan',
+        name: 'Other credentials',
+        connector: null,
+        credentials: orphans,
+        status: 'keys-only',
+        type: 'credential',
+        capabilities: [],
+        health: [],
+      });
+    }
+
+    // Sort: connected first, then partial, then keys-only, then not-configured
+    const order: Record<string, number> = { connected: 0, active: 0, partial: 1, 'keys-only': 2, available: 3, incomplete: 4, 'not-configured': 5 };
+    services.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
+
+    return services;
+  }, [connectors, credentials]);
+}
+
+function ServiceStatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    connected: 'text-green bg-green/10',
+    active: 'text-green bg-green/10',
+    partial: 'text-yellow bg-yellow/10',
+    'keys-only': 'text-blue bg-blue/10',
+    available: 'text-text-quaternary bg-bg-tertiary',
+    incomplete: 'text-yellow bg-yellow/10',
+    'not-configured': 'text-text-quaternary bg-bg-tertiary',
+  };
+  const labels: Record<string, string> = {
+    connected: 'Connected',
+    active: 'Active',
+    partial: 'Partial',
+    'keys-only': 'Keys only',
+    available: 'Available',
+    incomplete: 'Incomplete',
+    'not-configured': 'Not configured',
+  };
+  return (
+    <span className={`text-[9px] font-[510] px-1.5 py-0.5 rounded ${styles[status] ?? styles.available}`}>
+      {labels[status] ?? status}
+    </span>
+  );
+}
+
+function ServiceCard({ service }: { service: ServiceGroup }) {
+  const [expanded, setExpanded] = useState(false);
+  const conn = service.connector;
+  const presentCount = service.credentials.filter(c => c.present).length;
+  const totalCreds = service.credentials.length;
+  const healthOk = service.health.filter(h => h.status === 'ok').length;
+
+  return (
+    <div
+      className="rounded-lg border border-border/50 hover:border-border-secondary transition-colors cursor-pointer"
+      style={{
+        transitionDuration: '80ms',
+        borderLeftWidth: service.color ? 3 : undefined,
+        borderLeftColor: service.color ?? undefined,
+      }}
+      onClick={() => setExpanded(e => !e)}
+    >
+      {/* Header */}
+      <div className="flex items-start gap-3 p-4">
+        <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center shrink-0">
+          <span className="text-[14px] font-[600] text-text-quaternary">
+            {service.name.charAt(0)}
+          </span>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-[14px] font-[560] text-text">{service.name}</span>
+            <StatusDot status={service.status === 'active' ? 'connected' : service.status} />
+            <ServiceStatusBadge status={service.status} />
+          </div>
+          {conn?.description && (
+            <p className="text-[11px] text-text-quaternary leading-[1.4] mb-2">{conn.description}</p>
+          )}
+          <div className="flex items-center gap-3 text-[10px] text-text-quaternary">
+            {conn && <span className="font-mono">{service.type}</span>}
+            {service.capabilities.length > 0 && (
+              <span>{service.capabilities.length} capabilities</span>
+            )}
+            {totalCreds > 0 && (
+              <span className={presentCount === totalCreds ? 'text-green/70' : 'text-yellow/70'}>
+                <KeyRound className="w-2.5 h-2.5 inline mr-0.5" />
+                {presentCount}/{totalCreds} keys
+              </span>
+            )}
+            {service.health.length > 0 && (
+              <span className={healthOk === service.health.length ? 'text-green/70' : 'text-yellow/70'}>
+                <Shield className="w-2.5 h-2.5 inline mr-0.5" />
+                {healthOk}/{service.health.length} checks
+              </span>
+            )}
+          </div>
+        </div>
+        <ChevronRight className={`w-4 h-4 text-text-quaternary shrink-0 mt-1 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
+      </div>
+
+      {/* Expanded detail */}
+      {expanded && (
+        <div className="border-t border-border/30 px-4 pb-4">
+          {/* Credentials */}
+          {service.credentials.length > 0 && (
+            <div className="pt-3">
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary block mb-2">Credentials</span>
+              <div className="space-y-1">
+                {service.credentials.map(cred => (
+                  <div key={cred.name} className="flex items-center gap-2 py-1 px-2 rounded hover:bg-hover transition-colors" style={{ transitionDuration: '80ms' }}>
+                    {cred.present
+                      ? <Check className="w-3 h-3 text-green/70 shrink-0" />
+                      : <AlertCircle className="w-3 h-3 text-red/60 shrink-0" />
+                    }
+                    <span className="text-[11px] font-mono text-text-secondary">{cred.name}</span>
+                    <span className={`text-[8px] font-[510] px-1 py-px rounded ${
+                      (cred as any).category === 'api' ? 'text-accent/60 bg-accent/8' :
+                      (cred as any).category === 'oauth' ? 'text-blue/60 bg-blue/8' :
+                      (cred as any).category === 'messaging' ? 'text-teal/60 bg-teal/8' :
+                      (cred as any).category === 'account' ? 'text-purple/60 bg-purple/8' :
+                      'text-text-quaternary bg-bg-tertiary'
+                    }`}>
+                      {(cred as any).category ?? 'other'}
+                    </span>
+                    {cred.description && (
+                      <span className="text-[10px] text-text-quaternary/60 ml-auto">{cred.description}</span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Capabilities */}
+          {service.capabilities.length > 0 && (
+            <div className="pt-3">
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary block mb-2">Capabilities</span>
+              <div className="flex flex-wrap gap-1.5">
+                {service.capabilities.map(cap => (
+                  <span key={cap.id} className="text-[10px] text-text-tertiary bg-[rgba(255,245,235,0.04)] rounded px-2 py-1" title={cap.description}>
+                    {cap.label}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Health checks */}
+          {service.health.length > 0 && (
+            <div className="pt-3">
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary block mb-2">Health checks</span>
+              <div className="space-y-1">
+                {service.health.map((h, i) => (
+                  <div key={i} className="flex items-center gap-2 text-[10px]">
+                    {h.status === 'ok'
+                      ? <Check className="w-2.5 h-2.5 text-green/70" />
+                      : <X className="w-2.5 h-2.5 text-red/60" />
+                    }
+                    <span className="text-text-tertiary">{h.name}</span>
+                    {h.detail && <span className="text-text-quaternary/60">{h.detail}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Configuration */}
+          {conn && (
+            <div className="pt-3">
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary block mb-2">Configuration</span>
+              <div className="space-y-1 text-[10px]">
+                <div className="flex items-center gap-2">
+                  <span className="text-text-quaternary w-12">Scope</span>
+                  <span className="font-mono text-text-tertiary">{conn.scope}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-text-quaternary w-12">Type</span>
+                  <span className="font-mono text-text-tertiary">{conn.type}</span>
+                </div>
+                {conn.credential && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-text-quaternary w-12">Key</span>
+                    <span className="font-mono text-text-tertiary">{conn.credential}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ServicesTab({ connectors, credentials }: { connectors: Connector[]; credentials: Credential[] }) {
+  const services = useServices(connectors, credentials);
+
+  if (connectors.length === 0 && credentials.length === 0) {
+    return (
+      <div className="text-center py-16">
+        <Layers className="w-8 h-8 text-text-quaternary/30 mx-auto mb-3" />
+        <p className="text-[13px] text-text-tertiary">No services discovered</p>
+      </div>
+    );
+  }
+
+  // Group by status category
+  const connected = services.filter(s => s.status === 'connected' || s.status === 'active');
+  const partial = services.filter(s => s.status === 'partial');
+  const available = services.filter(s => s.status === 'available' || s.status === 'keys-only' || s.status === 'incomplete');
+  const unconfigured = services.filter(s => s.status === 'not-configured');
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <span className="text-[11px] text-text-quaternary">
+          {connected.length} connected · {services.length} total
+        </span>
+      </div>
+
+      {connected.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2 h-2 rounded-full bg-green" />
+            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Connected</span>
+            <span className="text-[10px] text-text-quaternary/50">({connected.length})</span>
+          </div>
+          <div className="space-y-2">
+            {connected.map(s => <ServiceCard key={s.id} service={s} />)}
+          </div>
+        </div>
+      )}
+
+      {partial.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2 h-2 rounded-full bg-yellow" />
+            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Partial</span>
+            <span className="text-[10px] text-text-quaternary/50">({partial.length})</span>
+          </div>
+          <div className="space-y-2">
+            {partial.map(s => <ServiceCard key={s.id} service={s} />)}
+          </div>
+        </div>
+      )}
+
+      {available.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2 h-2 rounded-full bg-blue/50" />
+            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Available</span>
+            <span className="text-[10px] text-text-quaternary/50">({available.length})</span>
+          </div>
+          <div className="space-y-2">
+            {available.map(s => <ServiceCard key={s.id} service={s} />)}
+          </div>
+        </div>
+      )}
+
+      {unconfigured.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="w-2 h-2 rounded-full bg-text-quaternary/30" />
+            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Not configured</span>
+            <span className="text-[10px] text-text-quaternary/50">({unconfigured.length})</span>
+          </div>
+          <div className="space-y-2">
+            {unconfigured.map(s => <ServiceCard key={s.id} service={s} />)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
 // Main page
 // ============================================================
 
 export default function IntegrationsPage() {
-  const [tab, setTab] = useState<TabId>('providers');
+  const [tab, setTab] = useState<TabId>('services');
   const [showConnectorForm, setShowConnectorForm] = useState(false);
   const [showProviderForm, setShowProviderForm] = useState(false);
   const { data: providers = [], isLoading: pLoading } = useProviders();
@@ -659,7 +1019,8 @@ export default function IntegrationsPage() {
   const projectC = (connectorData?.project ?? []) as Connector[];
   const agentC = (connectorData?.agent ?? []) as Connector[];
 
-  const isLoading = (tab === 'providers' && pLoading) || (tab === 'connectors' && cLoading) || (tab === 'credentials' && crLoading);
+  const allConnectors = (connectorData?.connectors ?? []) as Connector[];
+  const isLoading = (tab === 'providers' && pLoading) || (tab === 'connectors' && cLoading) || (tab === 'credentials' && crLoading) || (tab === 'services' && (cLoading || crLoading));
   // Activity tab manages its own loading state internally
 
   return (
@@ -685,6 +1046,11 @@ export default function IntegrationsPage() {
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-5 h-5 text-text-quaternary animate-spin" />
             </div>
+          )}
+
+          {/* Services */}
+          {tab === 'services' && !cLoading && !crLoading && (
+            <ServicesTab connectors={allConnectors} credentials={credentials} />
           )}
 
           {/* Providers */}
