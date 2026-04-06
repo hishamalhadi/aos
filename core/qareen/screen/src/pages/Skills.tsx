@@ -6,6 +6,8 @@ import {
 import type { ReactNode } from 'react';
 import { useSkills, useSkill } from '@/hooks/useSkills';
 import type { Skill } from '@/hooks/useSkills';
+import { useAgents } from '@/hooks/useAgents';
+import type { Agent } from '@/hooks/useAgents';
 
 // ============================================================
 // Constants
@@ -33,7 +35,19 @@ const GLASS: React.CSSProperties = {
 // Skill Row
 // ============================================================
 
-function SkillRow({ skill, onClick }: { skill: Skill; onClick: () => void }) {
+function AgentPill({ agent }: { agent: Agent }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 text-[10px] font-[510] rounded-full px-1.5 py-px"
+      style={{ backgroundColor: (agent.color || '#6B6560') + '12', color: agent.color || '#6B6560' }}
+    >
+      <span className="text-[9px] font-[600]">{agent.initials || agent.name.slice(0, 2).toUpperCase()}</span>
+      {agent.name}
+    </span>
+  );
+}
+
+function SkillRow({ skill, agents, totalAgents, onClick }: { skill: Skill; agents: Agent[]; totalAgents: number; onClick: () => void }) {
   const cat = CATEGORY_META[skill.category] ?? CATEGORY_META.domain;
   return (
     <button
@@ -43,21 +57,25 @@ function SkillRow({ skill, onClick }: { skill: Skill; onClick: () => void }) {
     >
       <span className="text-text-quaternary shrink-0">{cat.icon}</span>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="text-[13px] font-[560] text-text tracking-[-0.01em]">{skill.name}</span>
           <span className={`text-[10px] font-[510] ${cat.color}`}>{skill.category}</span>
         </div>
-        <p className="text-[11px] text-text-quaternary leading-[1.5] mt-0.5 line-clamp-2">{skill.description}</p>
+        <p className="text-[11px] text-text-quaternary leading-[1.5] mt-0.5 line-clamp-1">{skill.description}</p>
+        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+          {agents.length > 0 ? (
+            agents.map(a => <AgentPill key={a.id} agent={a} />)
+          ) : (
+            <span className="text-[10px] text-text-quaternary/50">
+              Available to all {totalAgents} agents
+            </span>
+          )}
+        </div>
       </div>
       <div className="flex items-center gap-2.5 shrink-0">
         {skill.triggers.length > 0 && (
-          <span className="text-[10px] text-text-quaternary/50 font-mono hidden sm:block truncate max-w-[140px]">
+          <span className="text-[10px] text-text-quaternary/50 font-mono hidden sm:block truncate max-w-[120px]">
             {skill.triggers[0]}
-          </span>
-        )}
-        {skill.allowed_tools.length > 0 && (
-          <span className="text-[10px] text-text-quaternary hidden md:block">
-            {skill.allowed_tools.length} tools
           </span>
         )}
         <ChevronRight className="w-3.5 h-3.5 text-text-quaternary/30 group-hover:text-text-quaternary transition-colors" />
@@ -70,7 +88,7 @@ function SkillRow({ skill, onClick }: { skill: Skill; onClick: () => void }) {
 // Detail Panel
 // ============================================================
 
-function SkillDetail({ skillId, onClose }: { skillId: string; onClose: () => void }) {
+function SkillDetail({ skillId, agents, totalAgents, onClose }: { skillId: string; agents: Agent[]; totalAgents: number; onClose: () => void }) {
   const { data: skill, isLoading } = useSkill(skillId);
 
   return (
@@ -117,6 +135,34 @@ function SkillDetail({ skillId, onClose }: { skillId: string; onClose: () => voi
                   </div>
                 </Section>
               )}
+
+              {/* Agents with access */}
+              <Section title="Availability">
+                {agents.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] text-text-quaternary mb-2">Declared by these agents:</p>
+                    {agents.map(a => (
+                      <div key={a.id} className="flex items-center gap-2.5 py-1.5 px-2 rounded-md bg-[rgba(255,245,235,0.03)]">
+                        <div
+                          className="w-6 h-6 rounded flex items-center justify-center text-[9px] font-[600] shrink-0"
+                          style={{ backgroundColor: (a.color || '#6B6560') + '15', color: a.color || '#6B6560' }}
+                        >
+                          {a.initials || a.name.slice(0, 2).toUpperCase()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <span className="text-[12px] font-[510] text-text block leading-tight">{a.name}</span>
+                          <span className="text-[10px] text-text-quaternary">{a.role || a.model}</span>
+                        </div>
+                        {a.is_system && <span className="text-[8px] font-[510] text-purple/60 uppercase tracking-wider">sys</span>}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-[12px] text-text-tertiary">
+                    Globally installed — available to all {totalAgents} agents via <span className="font-mono text-accent/70">~/.claude/skills/</span>
+                  </p>
+                )}
+              </Section>
 
               {/* Tools */}
               {skill.allowed_tools.length > 0 && (
@@ -166,6 +212,23 @@ export default function SkillsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data: skills = [], isLoading } = useSkills();
+  const { data: agents = [] } = useAgents();
+
+  // Build skill → agents map (from agents that declare skills in frontmatter)
+  // Also include catalog agents for richer mapping
+  const skillAgents = useMemo(() => {
+    const map = new Map<string, Agent[]>();
+    for (const agent of agents) {
+      for (const skillId of agent.skills) {
+        if (!map.has(skillId)) map.set(skillId, []);
+        map.get(skillId)!.push(agent);
+      }
+    }
+    return map;
+  }, [agents]);
+
+  // Count of installed agents (skills are globally available to all)
+  const installedCount = agents.length;
 
   const filtered = useMemo(() => {
     let result = skills;
@@ -238,7 +301,7 @@ export default function SkillsPage() {
             </div>
           ) : (
             filtered.map(skill => (
-              <SkillRow key={skill.id} skill={skill} onClick={() => setSelectedId(skill.id)} />
+              <SkillRow key={skill.id} skill={skill} agents={skillAgents.get(skill.id) ?? []} totalAgents={installedCount} onClick={() => setSelectedId(skill.id)} />
             ))
           )}
         </div>
@@ -246,7 +309,7 @@ export default function SkillsPage() {
 
       {/* Detail panel */}
       {selectedId && (
-        <SkillDetail skillId={selectedId} onClose={() => setSelectedId(null)} />
+        <SkillDetail skillId={selectedId} agents={skillAgents.get(selectedId) ?? []} totalAgents={installedCount} onClose={() => setSelectedId(null)} />
       )}
 
       <style>{`
