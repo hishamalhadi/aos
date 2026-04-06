@@ -139,6 +139,15 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to wire SSE manager")
 
+    # Wire execution router to EventBus
+    if bus:
+        try:
+            from core.engine.execution.router import wire_bus
+
+            wire_bus(bus)
+        except Exception:
+            logger.debug("Failed to wire execution router to bus")
+
     # Voice manager
     try:
         from qareen.voice.manager import VoiceManager
@@ -212,7 +221,11 @@ async def lifespan(app: FastAPI):
         try:
             from qareen.api.companion import wire_companion_to_bus
 
-            wire_companion_to_bus(bus, intelligence_engine=intelligence_engine)
+            wire_companion_to_bus(
+                bus,
+                intelligence_engine=intelligence_engine,
+                stream_processor=getattr(app.state, "stream_processor", None),
+            )
         except Exception:
             logger.exception(
                 "Failed to wire companion to bus — companion SSE may be degraded"
@@ -805,10 +818,12 @@ _api_routers = [
     ("qareen.api.days", "days"),
     ("qareen.api.connectors", "connectors"),
     ("qareen.api.integrations", "integrations"),
+    ("qareen.api.intelligence", "intelligence"),
     ("qareen.api.architect", "architect"),
     ("qareen.api.flow_builder", "flow_builder"),
     ("qareen.api.assist", "assist"),
     ("qareen.api.context", "context"),
+    ("qareen.api.executions", "executions"),
 ]
 
 for module_path, name in _api_routers:

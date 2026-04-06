@@ -32,6 +32,16 @@ PROVIDERS_FILE = Path.home() / ".aos" / "config" / "providers.yaml"
 AGENTS_DIR = Path.home() / ".claude" / "agents"
 SYSTEM_DIR = Path.home() / "aos" / "core" / "agents"
 
+# Module-level bus reference — set via wire_bus() from main.py
+_bus: Any = None
+
+
+def wire_bus(bus: Any) -> None:
+    """Wire the EventBus so executions emit events. Called from main.py."""
+    global _bus
+    _bus = bus
+    logger.info("ExecutionRouter wired to EventBus")
+
 
 def _load_providers() -> dict[str, Any]:
     """Load provider configs from yaml."""
@@ -194,15 +204,65 @@ class ExecutionRouter:
             result.provider = provider_id
             result.model = model_name
             result.duration_ms = elapsed
+
+            self._log_and_emit(result, agent_id, prompt)
             return result
 
         except Exception as e:
             elapsed = int((time.monotonic() - start) * 1000)
             logger.exception("Execution failed for %s/%s", provider_id, model_name)
-            return ExecutionResult(
+            result = ExecutionResult(
                 text="", provider=provider_id, model=model_name,
                 status="error", duration_ms=elapsed, error=str(e),
             )
+            self._log_and_emit(result, agent_id, prompt)
+            return result
+
+    def _log_and_emit(self, result: ExecutionResult, agent_id: str | None, prompt: str) -> None:
+        """Log execution to telemetry DB and emit EventBus event. Never raises."""
+        # Log to execution_log table
+        try:
+            from qareen.api.executions import log_execution
+            log_execution(
+                agent_id=agent_id,
+                provider=result.provider,
+                model=result.model,
+                prompt_preview=prompt,
+                status=result.status,
+                duration_ms=result.duration_ms,
+                tokens_in=result.tokens_in,
+                tokens_out=result.tokens_out,
+                error=result.error,
+            )
+        except Exception:
+            logger.debug("Failed to log execution", exc_info=True)
+
+        # Emit event to bus
+        if _bus is not None:
+            try:
+                import asyncio
+                from qareen.events.types import Event
+
+                event = Event(
+                    event_type="execution",
+                    source=agent_id or "router",
+                    payload={
+                        "agent_id": agent_id,
+                        "provider": result.provider,
+                        "model": result.model,
+                        "status": result.status,
+                        "duration_ms": result.duration_ms,
+                        "tokens_in": result.tokens_in,
+                        "tokens_out": result.tokens_out,
+                    },
+                )
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_bus.emit(event))
+                except RuntimeError:
+                    pass  # No running loop — skip event emission
+            except Exception:
+                logger.debug("Failed to emit execution event", exc_info=True)
 
     async def _execute_harness(
         self, model: str, prompt: str, system_prompt: str | None, timeout: float,

@@ -2,17 +2,23 @@
 
 AOS owns canonical config at ~/.aos/config/. This API reads/writes those
 files and provides the data for the Integrations page.
+
+The connectors endpoint merges two data sources:
+  - Connector manifests (core/infra/connectors/*.yaml) — what exists, health checks
+  - User config (~/.aos/config/connectors.yaml) — what's configured (command, env, scope)
 """
 
 from __future__ import annotations
 
 import logging
 import subprocess
+import sys
+import time
 from pathlib import Path
 from typing import Any
 
 import yaml
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 logger = logging.getLogger(__name__)
@@ -24,6 +30,11 @@ PROVIDERS_FILE = CONFIG_DIR / "providers.yaml"
 CONNECTORS_FILE = CONFIG_DIR / "connectors.yaml"
 CREDENTIALS_FILE = CONFIG_DIR / "credentials.yaml"
 MCP_JSON = Path.home() / ".claude" / "mcp.json"
+AOS_HOME = Path.home() / "aos"
+
+# Discovery cache — avoid re-running health checks on every request
+_discovery_cache: dict[str, Any] = {"data": None, "ts": 0}
+_CACHE_TTL = 60  # seconds
 
 
 def _load_yaml(path: Path) -> dict[str, Any]:
@@ -34,6 +45,23 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     except Exception:
         logger.exception("Failed to load %s", path)
         return {}
+
+
+def _get_discovery() -> list[Any]:
+    """Run connector discovery with caching."""
+    now = time.monotonic()
+    if _discovery_cache["data"] is not None and (now - _discovery_cache["ts"]) < _CACHE_TTL:
+        return _discovery_cache["data"]
+    try:
+        sys.path.insert(0, str(AOS_HOME / "core"))
+        from infra.connectors.discover import discover_all
+        connectors = discover_all()
+        _discovery_cache["data"] = connectors
+        _discovery_cache["ts"] = now
+        return connectors
+    except Exception:
+        logger.exception("Connector discovery failed")
+        return _discovery_cache["data"] or []
 
 
 def _save_yaml(path: Path, data: dict[str, Any]) -> None:
@@ -98,31 +126,83 @@ async def list_providers() -> dict[str, Any]:
 
 @router.get("/connectors")
 async def list_connectors() -> dict[str, Any]:
-    """List all connectors grouped by scope."""
+    """List all connectors with health status, merging discovery and config."""
+    # Load user config (what's configured)
     data = _load_yaml(CONNECTORS_FILE)
-    connectors = data.get("connectors", {})
+    yaml_connectors = data.get("connectors", {})
+
+    # Run discovery (what exists + health checks)
+    discovered = _get_discovery()
+    discovery_by_id = {c.id: c for c in discovered}
 
     result = []
-    for cid, cfg in connectors.items():
-        is_configured = cfg.get("command") is not None
-        status = cfg.get("status", "active" if is_configured else "not-configured")
+    seen_ids: set[str] = set()
 
-        result.append({
+    # Merge: start with YAML config, enrich with discovery
+    for cid, cfg in yaml_connectors.items():
+        seen_ids.add(cid)
+        is_configured = cfg.get("command") is not None
+        disc = discovery_by_id.get(cid)
+
+        entry: dict[str, Any] = {
             "id": cid,
-            "type": cfg.get("type", "mcp-stdio"),
-            "display_name": cfg.get("display_name", cid),
-            "description": cfg.get("description", ""),
+            "type": cfg.get("type", disc.type if disc else "mcp-stdio"),
+            "display_name": cfg.get("display_name", disc.name if disc else cid),
+            "description": cfg.get("description", disc.description if disc else ""),
             "scope": cfg.get("scope", "agent"),
             "credential": cfg.get("credential"),
             "tags": cfg.get("tags", []),
             "is_configured": is_configured,
-            "status": status,
-        })
+        }
+
+        # Enrich with discovery data
+        if disc:
+            entry["status"] = disc.status
+            entry["status_detail"] = disc.status_detail
+            entry["health"] = disc.health
+            entry["capabilities"] = disc.capabilities
+            entry["icon"] = disc.icon
+            entry["color"] = disc.color
+            entry["tier"] = disc.tier
+            entry["category"] = disc.category
+            entry["automation_ideas"] = disc.automation_ideas
+            entry["accounts"] = disc.accounts
+        else:
+            entry["status"] = "active" if is_configured else "not-configured"
+            entry["status_detail"] = ""
+            entry["health"] = []
+            entry["capabilities"] = []
+
+        result.append(entry)
+
+    # Add discovered connectors not in YAML config (available but not configured)
+    for disc in discovered:
+        if disc.id not in seen_ids:
+            result.append({
+                "id": disc.id,
+                "type": disc.type,
+                "display_name": disc.name,
+                "description": disc.description,
+                "scope": "agent",
+                "credential": None,
+                "tags": [],
+                "is_configured": False,
+                "status": disc.status,
+                "status_detail": disc.status_detail,
+                "health": disc.health,
+                "capabilities": disc.capabilities,
+                "icon": disc.icon,
+                "color": disc.color,
+                "tier": disc.tier,
+                "category": disc.category,
+                "automation_ideas": disc.automation_ideas,
+                "accounts": disc.accounts,
+            })
 
     # Group by scope
-    global_c = [c for c in result if c["scope"] == "global"]
-    project_c = [c for c in result if c["scope"] == "project"]
-    agent_c = [c for c in result if c["scope"] == "agent"]
+    global_c = [c for c in result if c.get("scope") == "global"]
+    project_c = [c for c in result if c.get("scope") == "project"]
+    agent_c = [c for c in result if c.get("scope") == "agent"]
 
     return {
         "connectors": result,
@@ -130,7 +210,8 @@ async def list_connectors() -> dict[str, Any]:
         "project": project_c,
         "agent": agent_c,
         "total": len(result),
-        "configured": sum(1 for c in result if c["is_configured"]),
+        "configured": sum(1 for c in result if c.get("is_configured")),
+        "connected": sum(1 for c in result if c.get("status") == "connected"),
     }
 
 
@@ -327,3 +408,138 @@ async def sync_connectors() -> JSONResponse:
     data = _load_yaml(CONNECTORS_FILE)
     _sync_to_mcp_json(data)
     return JSONResponse({"ok": True, "message": "Synced to mcp.json"})
+
+
+# ---------------------------------------------------------------------------
+# Health
+# ---------------------------------------------------------------------------
+
+@router.get("/health")
+async def integrations_health() -> JSONResponse:
+    """Run health checks on all connectors and return results."""
+    discovered = _get_discovery()
+    return JSONResponse({
+        "connectors": [c.to_dict() for c in discovered],
+        "summary": {
+            "total": len(discovered),
+            "connected": sum(1 for c in discovered if c.status == "connected"),
+            "partial": sum(1 for c in discovered if c.status == "partial"),
+            "available": sum(1 for c in discovered if c.status == "available"),
+        },
+    })
+
+
+@router.post("/health/refresh")
+async def refresh_health() -> JSONResponse:
+    """Force re-run health checks (bypass cache)."""
+    _discovery_cache["data"] = None
+    _discovery_cache["ts"] = 0
+    discovered = _get_discovery()
+    return JSONResponse({
+        "ok": True,
+        "summary": {
+            "total": len(discovered),
+            "connected": sum(1 for c in discovered if c.status == "connected"),
+        },
+    })
+
+
+# ---------------------------------------------------------------------------
+# Provider management
+# ---------------------------------------------------------------------------
+
+@router.post("/providers")
+async def add_provider(request: Request) -> JSONResponse:
+    """Add a new AI provider."""
+    body = await request.json()
+    pid = body.get("id")
+    if not pid:
+        return JSONResponse({"error": "Missing provider id"}, status_code=400)
+
+    data = _load_yaml(PROVIDERS_FILE)
+    providers = data.setdefault("providers", {})
+
+    if pid in providers:
+        return JSONResponse({"error": f"Provider '{pid}' already exists"}, status_code=409)
+
+    providers[pid] = {
+        "type": body.get("type", "api"),
+        "display_name": body.get("display_name", pid),
+        "description": body.get("description", ""),
+        "endpoint": body.get("endpoint"),
+        "credential": body.get("credential"),
+        "models": body.get("models", []),
+        "is_default": body.get("is_default", False),
+        "status": "configured",
+    }
+
+    data["providers"] = providers
+    _save_yaml(PROVIDERS_FILE, data)
+    return JSONResponse({"ok": True, "id": pid}, status_code=201)
+
+
+@router.post("/providers/{provider_id}/verify")
+async def verify_provider(provider_id: str) -> JSONResponse:
+    """Verify a provider's credential actually works.
+
+    Makes a minimal API call to check authentication.
+    """
+    data = _load_yaml(PROVIDERS_FILE)
+    providers = data.get("providers", {})
+    cfg = providers.get(provider_id)
+
+    if not cfg:
+        return JSONResponse({"error": "Provider not found"}, status_code=404)
+
+    cred_name = cfg.get("credential")
+    if not cred_name:
+        return JSONResponse({"ok": True, "status": "no-credential", "detail": "No credential required"})
+
+    # Check credential exists in keychain
+    agent_secret = str(Path.home() / "aos" / "core" / "bin" / "cli" / "agent-secret")
+    try:
+        r = subprocess.run(
+            [agent_secret, "get", cred_name],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode != 0:
+            return JSONResponse({"ok": False, "status": "missing", "detail": f"Credential '{cred_name}' not in keychain"})
+        api_key = r.stdout.strip()
+    except Exception:
+        return JSONResponse({"ok": False, "status": "error", "detail": "Failed to read keychain"})
+
+    # Verify credential by making a minimal API call
+    ptype = cfg.get("type", "api")
+    try:
+        import httpx
+        if ptype == "api":
+            # Anthropic: list models
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{cfg.get('endpoint', 'https://api.anthropic.com')}/v1/models",
+                    headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+                )
+                if resp.status_code == 200:
+                    return JSONResponse({"ok": True, "status": "verified", "detail": "API key valid"})
+                return JSONResponse({"ok": False, "status": "invalid", "detail": f"API returned {resp.status_code}"})
+        elif ptype == "gateway":
+            # OpenRouter / OpenAI-compatible: list models
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    f"{cfg.get('endpoint', 'https://openrouter.ai/api/v1')}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                )
+                if resp.status_code == 200:
+                    return JSONResponse({"ok": True, "status": "verified", "detail": "API key valid"})
+                return JSONResponse({"ok": False, "status": "invalid", "detail": f"Gateway returned {resp.status_code}"})
+        elif ptype == "local":
+            endpoint = cfg.get("endpoint", "http://localhost:11434")
+            async with httpx.AsyncClient(timeout=5) as client:
+                resp = await client.get(endpoint)
+                if resp.status_code == 200:
+                    return JSONResponse({"ok": True, "status": "verified", "detail": "Service reachable"})
+                return JSONResponse({"ok": False, "status": "unreachable", "detail": "Service not responding"})
+        else:
+            return JSONResponse({"ok": True, "status": "skip", "detail": f"No verification for type '{ptype}'"})
+    except Exception as e:
+        return JSONResponse({"ok": False, "status": "error", "detail": str(e)[:200]})
