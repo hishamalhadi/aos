@@ -30,10 +30,9 @@ health:
     - name: app_exists
       type: app_exists
       path: /System/Applications/Contacts.app
-    - name: applescript_access
-      type: command
-      command: "osascript -e 'tell application \"Contacts\" to get name of people' 2>/dev/null"
-      description: Can read contact names via AppleScript
+    - name: contacts_data
+      type: file_exists
+      path: ~/Library/Application Support/AddressBook/Sources/*/AddressBook-v22.abcddb
 
 automation_ideas:
   - id: birthday_reminders

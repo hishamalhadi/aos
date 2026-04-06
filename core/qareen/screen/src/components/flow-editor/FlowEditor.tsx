@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom';
 import FlowCanvas from './FlowCanvas';
 import NodePalette from './panels/NodePalette';
 import NodeConfigPanel from './panels/NodeConfigPanel';
+import { ConnectorProvider } from './ConnectorContext';
 import { useFlowEditor } from './hooks/useFlowEditor';
 import type { N8nWorkflow, EditorMode, WorkflowMeta } from './types';
 
@@ -88,6 +89,7 @@ export default function FlowEditor({
   }
 
   return (
+    <ConnectorProvider>
     <div className="h-full flex flex-col bg-bg font-sans">
       {/* Toolbar */}
       <div className="flex items-center gap-3 h-12 px-4 border-b border-border flex-shrink-0">
@@ -154,5 +156,6 @@ export default function FlowEditor({
         )}
       </div>
     </div>
+    </ConnectorProvider>
   );
 }

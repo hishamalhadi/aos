@@ -33,10 +33,9 @@ health:
     - name: app_exists
       type: app_exists
       path: /System/Applications/Calendar.app
-    - name: applescript_access
-      type: command
-      command: "osascript -e 'tell application \"Calendar\" to get name of calendars' 2>/dev/null"
-      description: Can read calendar names via AppleScript
+    - name: calendar_data
+      type: file_exists
+      path: ~/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb
 
 automation_ideas:
   - id: morning_schedule

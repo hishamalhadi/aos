@@ -1,6 +1,7 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SETTINGS_SECTIONS, SectionNav } from '@/components/settings';
+import { useRegisterPageActions, type PageAction } from '@/hooks/usePageActions';
 
 // ---------------------------------------------------------------------------
 // Settings — each nav item shows a different page (not scroll-to-section).
@@ -22,6 +23,17 @@ export default function SettingsPage() {
 
   const activeSection = SETTINGS_SECTIONS.find((s) => s.id === activeId) ?? SETTINGS_SECTIONS[0];
   const ActiveComponent = activeSection.component;
+
+  const pageActions: PageAction[] = useMemo(() => [
+    {
+      id: 'settings.switch_section',
+      label: 'Switch settings section',
+      category: 'navigate',
+      params: [{ name: 'section', type: 'enum' as const, required: true, description: 'Settings section', options: SETTINGS_SECTIONS.map(s => s.id) }],
+      execute: ({ section }) => selectSection(section as string),
+    },
+  ], [selectSection])
+  useRegisterPageActions(pageActions)
 
   return (
     <div className="h-full overflow-y-auto">

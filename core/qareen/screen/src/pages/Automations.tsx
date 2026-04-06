@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
+import { useRegisterPageActions, type PageAction } from '@/hooks/usePageActions';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,6 +19,7 @@ import {
   type N8nAutomation, type GenerateResult,
   type AutomationSuggestion,
 } from '@/hooks/useAutomations';
+import { useConnectors } from '@/hooks/useConnectors';
 
 // ---------------------------------------------------------------------------
 // Automations — n8n-powered workflows + system crons.
@@ -164,11 +166,16 @@ const CONNECTOR_ICONS: Record<string, typeof Zap> = {
 function SuggestionCard({
   suggestion,
   onSetUp,
+  connectorStatuses,
 }: {
   suggestion: AutomationSuggestion;
   onSetUp: (description: string) => void;
+  connectorStatuses: Record<string, string>;
 }) {
   const ConnectorIcon = CONNECTOR_ICONS[suggestion.source_icon] || Zap;
+  const allConnected = suggestion.required_connectors.every(
+    id => connectorStatuses[id] === 'connected'
+  );
 
   return (
     <div
@@ -191,12 +198,24 @@ function SuggestionCard({
         </div>
       </div>
       <div className="flex items-center justify-between mt-3 pt-2.5 border-t border-border">
-        <span className="text-[10px] text-text-quaternary">
-          {suggestion.source_connector_name}
-          {suggestion.required_connectors.length > 1 && ` + ${suggestion.required_connectors.length - 1} more`}
-        </span>
-        <span className="text-[11px] font-[510] text-accent opacity-0 group-hover:opacity-100 transition-opacity">
-          Set up
+        <div className="flex items-center gap-1.5">
+          {suggestion.required_connectors.map(id => {
+            const status = connectorStatuses[id];
+            const color = status === 'connected' ? '#30D158' : status === 'partial' ? '#FFD60A' : '#6B6560';
+            return (
+              <div key={id} className="flex items-center gap-1">
+                <div className="w-[5px] h-[5px] rounded-full" style={{ background: color }} />
+                <span className="text-[9px] text-text-quaternary capitalize">{id.replace(/-/g, ' ')}</span>
+              </div>
+            );
+          })}
+        </div>
+        <span className={`text-[11px] font-[510] transition-opacity ${
+          allConnected
+            ? 'text-green-400 opacity-100'
+            : 'text-accent opacity-0 group-hover:opacity-100'
+        }`}>
+          {allConnected ? 'Ready' : 'Set up'}
         </span>
       </div>
     </div>
@@ -252,10 +271,12 @@ function cronToHuman(cron: string): string {
   const h = parseInt(hour);
   const m = parseInt(min);
 
-  // Handle non-numeric cron fields (*/30, ranges, etc.)
+  // Handle non-numeric cron fields (*/30, *, ranges, etc.)
   if (isNaN(h) || isNaN(m)) {
     if (min.startsWith('*/')) return `Every ${min.slice(2)} minutes`;
     if (hour.startsWith('*/')) return `Every ${hour.slice(2)} hours`;
+    if (hour === '*' && !isNaN(m)) return m === 0 ? 'Every hour' : `Every hour at :${m.toString().padStart(2, '0')}`;
+    if (min === '*' && !isNaN(h)) return `Continuously at ${h > 12 ? h - 12 : h || 12}${h < 12 ? 'AM' : 'PM'}`;
     return cron;
   }
 
@@ -989,17 +1010,167 @@ function GenerateFlow({ onClose, initialDescription }: { onClose: () => void; in
   );
 }
 
+// ── Category labels ──
+
+const CATEGORY_LABELS: Record<string, string> = {
+  communication: 'Communication',
+  productivity: 'Productivity',
+  knowledge: 'Knowledge',
+  development: 'Development',
+  data: 'Data & Pipelines',
+  ecommerce: 'Commerce',
+  monitoring: 'Monitoring',
+  general: 'General',
+};
+
+const CATEGORY_ORDER = ['communication', 'productivity', 'knowledge', 'development', 'data', 'ecommerce'];
+
+type FilterTab = 'all' | 'active' | 'drafts' | 'system';
+
+// ── Filter bar — glass pill group ──
+
+function FilterBar({
+  active,
+  onChange,
+  counts,
+  onCreate,
+}: {
+  active: FilterTab;
+  onChange: (tab: FilterTab) => void;
+  counts: { all: number; active: number; drafts: number; system: number };
+  onCreate: () => void;
+}) {
+  const tabs: { id: FilterTab; label: string; count?: number }[] = [
+    { id: 'all', label: 'All' },
+    { id: 'active', label: 'Active', count: counts.active },
+    { id: 'drafts', label: 'Drafts', count: counts.drafts },
+    { id: 'system', label: 'System', count: counts.system },
+  ];
+
+  return (
+    <div className="fixed top-3 right-3 z-[300] flex items-center gap-2">
+      <div
+        className="inline-flex items-center gap-0.5 h-8 rounded-full px-1"
+        style={{
+          background: 'rgba(30, 26, 22, 0.75)',
+          backdropFilter: 'blur(16px)',
+          WebkitBackdropFilter: 'blur(16px)',
+          border: '1px solid rgba(255, 245, 235, 0.10)',
+          boxShadow: '0 2px 12px rgba(0, 0, 0, 0.3)',
+        }}
+      >
+        {tabs.map((tab) => {
+          const isActive = tab.id === active;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => onChange(tab.id)}
+              className="flex items-center gap-1 px-2.5 h-6 rounded-full text-[11px] font-[510] transition-colors cursor-pointer"
+              style={{
+                background: isActive ? 'rgba(255, 245, 235, 0.12)' : 'transparent',
+                color: isActive ? 'var(--color-text)' : 'var(--color-text-tertiary)',
+                transitionDuration: '150ms',
+              }}
+            >
+              {tab.label}
+              {tab.count != null && tab.count > 0 && (
+                <span className="text-[9px] text-text-quaternary tabular-nums">{tab.count}</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <button
+        onClick={onCreate}
+        className="flex items-center gap-1.5 h-8 px-3 rounded-full text-[12px] font-[510] text-white cursor-pointer transition-colors"
+        style={{ background: '#D9730D' }}
+      >
+        <Sparkles className="w-3.5 h-3.5" /> New
+      </button>
+    </div>
+  );
+}
+
+// ── Featured suggestion cards (larger) ──
+
+function FeaturedCard({
+  suggestion,
+  onSetUp,
+}: {
+  suggestion: AutomationSuggestion;
+  onSetUp: () => void;
+}) {
+  const ConnectorIcon = CONNECTOR_ICONS[suggestion.source_icon] || Zap;
+
+  return (
+    <div
+      className="rounded-[10px] border border-border p-5 transition-all duration-150 hover:border-border-secondary cursor-pointer"
+      style={{ background: 'var(--glass-bg)', backdropFilter: 'blur(12px)' }}
+      onClick={onSetUp}
+    >
+      <div className="flex items-start gap-3">
+        <div
+          className="w-10 h-10 rounded-[9px] flex items-center justify-center flex-shrink-0"
+          style={{ backgroundColor: suggestion.source_color + '18' }}
+        >
+          <ConnectorIcon className="w-5 h-5" style={{ color: suggestion.source_color }} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className="text-[14px] font-[560] text-text block">{suggestion.name}</span>
+          <p className="text-[12px] text-text-tertiary mt-1 leading-relaxed line-clamp-2">
+            {suggestion.description}
+          </p>
+          <div className="flex items-center gap-2 mt-2.5">
+            <span className="text-[10px] text-text-quaternary">
+              {suggestion.source_connector_name}
+              {suggestion.required_connectors.length > 1 && ` + ${suggestion.required_connectors.length - 1} more`}
+            </span>
+            <span className="text-[11px] font-[510] text-accent ml-auto">Set up →</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Category section ──
+
+function CategorySection({
+  category,
+  suggestions,
+  onSetUp,
+}: {
+  category: string;
+  suggestions: AutomationSuggestion[];
+  onSetUp: (desc: string) => void;
+}) {
+  if (suggestions.length === 0) return null;
+
+  return (
+    <div className="mb-6">
+      <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2.5">
+        {CATEGORY_LABELS[category] || category}
+      </span>
+      <div className="grid grid-cols-2 gap-3">
+        {suggestions.map((s) => (
+          <SuggestionCard key={s.id} suggestion={s} onSetUp={onSetUp} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Main page ──
 
 export default function AutomationsPage() {
-  const { data: cronsData, isLoading } = useSystemCrons();
-  const { data: n8nData } = useN8nAutomations();
+  const { data: cronsData, isLoading: cronsLoading } = useSystemCrons();
+  const { data: n8nData, isLoading: n8nLoading } = useN8nAutomations();
   const { data: healthData } = useAutomationsHealth();
-  const { data: suggestionsData } = useAutomationSuggestions();
+  const { data: suggestionsData, isLoading: suggestionsLoading } = useAutomationSuggestions();
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [showCreate, setShowCreate] = useState(false);
-  const [prefillDescription, setPrefillDescription] = useState<string | undefined>();
+  const [filter, setFilter] = useState<FilterTab>('all');
   const activate = useActivateAutomation();
   const deactivate = useDeactivateAutomation();
 
@@ -1008,62 +1179,80 @@ export default function AutomationsPage() {
       const res = await fetch(`/api/automations/${id}/run`, { method: 'POST' });
       return res.json();
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['automations'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['n8n-automations'] }),
   });
 
   const handleRun = useCallback((id: string) => {
     runMutation.mutate(id);
   }, [runMutation]);
 
-  const openCreate = useCallback((description?: string) => {
-    setPrefillDescription(description);
-    setShowCreate(true);
-  }, []);
+  const pageActions: PageAction[] = useMemo(() => [
+    {
+      id: 'automations.create',
+      label: 'Create new automation',
+      category: 'create',
+      execute: () => navigate('/automations/new'),
+    },
+  ], [navigate]);
+  useRegisterPageActions(pageActions);
 
   const systemCrons = cronsData?.system ?? [];
   const n8nAutomations = n8nData?.automations ?? [];
   const suggestions = suggestionsData?.suggestions ?? [];
-  const n8nHealthy = healthData?.status === 'ok';
+  const isReady = !cronsLoading && !n8nLoading && !suggestionsLoading;
+
+  // Derive counts
+  const activeAutomations = n8nAutomations.filter(a => a.status === 'active');
+  const draftAutomations = n8nAutomations.filter(a => a.status === 'draft' || a.status === 'paused');
+  const counts = {
+    all: n8nAutomations.length + systemCrons.length,
+    active: activeAutomations.length,
+    drafts: draftAutomations.length,
+    system: systemCrons.length,
+  };
+
+  // Group suggestions by category
+  const featured = suggestions.slice(0, 3);
+  const byCategory = useMemo(() => {
+    const groups: Record<string, AutomationSuggestion[]> = {};
+    for (const s of suggestions.slice(3)) {
+      const cat = s.category || 'general';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(s);
+    }
+    return groups;
+  }, [suggestions]);
+
+  // Loading state
+  if (!isReady) {
+    return (
+      <div className="h-full flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-5 h-5 animate-spin text-text-quaternary mx-auto mb-2" />
+          <span className="text-[12px] text-text-quaternary">Loading automations...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="bg-bg h-full overflow-y-auto font-sans">
-      {/* New pill — fixed top-right */}
-      <div className="fixed top-3 right-3 z-[300] flex items-center gap-2">
-        {/* n8n health indicator */}
-        {healthData && (
-          <div className="flex items-center gap-1.5 h-8 px-2.5 rounded-full bg-[rgba(30,26,22,0.60)] backdrop-blur-[12px] border border-[rgba(255,245,235,0.06)]">
-            <StatusDot color={n8nHealthy ? 'green' : 'gray'} size="sm" />
-            <span className="text-[10px] text-text-quaternary">
-              {n8nHealthy ? `${healthData.active_workflows ?? 0} active` : 'n8n offline'}
-            </span>
-          </div>
-        )}
-        <button
-          onClick={() => openCreate()}
-          className="
-            flex items-center gap-1.5 h-8 px-3
-            rounded-full
-            bg-[rgba(30,26,22,0.60)] backdrop-blur-[12px]
-            border border-[rgba(255,245,235,0.06)]
-            shadow-[0_2px_12px_rgba(0,0,0,0.3)]
-            text-text-secondary hover:text-text
-            transition-all duration-150 cursor-pointer
-            text-[12px] font-[510]
-          "
-        >
-          <Sparkles className="w-3.5 h-3.5" /> New
-        </button>
-      </div>
+    <div className="h-full overflow-y-auto font-sans">
+      <FilterBar
+        active={filter}
+        onChange={setFilter}
+        counts={counts}
+        onCreate={() => navigate('/automations/new')}
+      />
 
       <div className="max-w-[640px] mx-auto px-5 md:px-8 pt-14 pb-10">
 
-        {/* n8n-powered automations */}
-        {n8nAutomations.length > 0 && (
+        {/* Active automations — shown in All or Active filter */}
+        {(filter === 'all' || filter === 'active') && activeAutomations.length > 0 && (
           <div className="mb-6">
             <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2">
-              Automations
+              Active
             </span>
-            {n8nAutomations.map((a) => (
+            {activeAutomations.map((a) => (
               <N8nAutomationCard
                 key={a.id}
                 automation={a}
@@ -1075,43 +1264,73 @@ export default function AutomationsPage() {
           </div>
         )}
 
-        {/* Suggestions grid — shown when there are suggestions */}
-        {suggestions.length > 0 && (
-          <SuggestionGrid suggestions={suggestions} onSetUp={(desc) => openCreate(desc)} />
+        {/* Draft/paused automations — shown in All or Drafts filter */}
+        {(filter === 'all' || filter === 'drafts') && draftAutomations.length > 0 && (
+          <div className="mb-6">
+            <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2">
+              Drafts
+            </span>
+            {draftAutomations.map((a) => (
+              <N8nAutomationCard
+                key={a.id}
+                automation={a}
+                onActivate={() => activate.mutate(a.id)}
+                onDeactivate={() => deactivate.mutate(a.id)}
+                onView={() => navigate(`/automations/${a.id}`)}
+              />
+            ))}
+          </div>
         )}
 
-        {/* Empty state — only when no automations AND no suggestions */}
-        {n8nAutomations.length === 0 && suggestions.length === 0 && !isLoading && (
-          <div className="py-12">
+        {/* Featured suggestions — shown in All filter when there are suggestions */}
+        {filter === 'all' && featured.length > 0 && (
+          <div className="mb-6">
+            <span className="text-[11px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2.5">
+              Featured
+            </span>
+            <div className="space-y-3">
+              {featured.map((s) => (
+                <FeaturedCard
+                  key={s.id}
+                  suggestion={s}
+                  onSetUp={() => navigate('/automations/new')}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Category sections — shown in All filter */}
+        {filter === 'all' && CATEGORY_ORDER.map(cat => (
+          <CategorySection
+            key={cat}
+            category={cat}
+            suggestions={byCategory[cat] || []}
+            onSetUp={() => navigate('/automations/new')}
+          />
+        ))}
+
+        {/* System crons — shown in All or System filter */}
+        {(filter === 'all' || filter === 'system') && (
+          <SystemGroup crons={systemCrons} onRun={handleRun} />
+        )}
+
+        {/* Empty state — only when truly empty */}
+        {n8nAutomations.length === 0 && suggestions.length === 0 && systemCrons.length === 0 && (
+          <div className="py-16 text-center">
+            <Zap className="w-8 h-8 text-text-quaternary mx-auto mb-3 opacity-30" />
             <p className="text-[13px] text-text-quaternary mb-4">
-              No automations yet. Describe what you want automated and it'll run on your Mac Mini 24/7.
+              No automations yet. Describe what you want automated and it'll run on your Mac 24/7.
             </p>
             <button
-              onClick={() => openCreate()}
+              onClick={() => navigate('/automations/new')}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[7px] text-[12px] font-[510] bg-accent text-white hover:bg-accent-hover transition-colors cursor-pointer"
             >
               <Sparkles className="w-3.5 h-3.5" /> Create your first automation
             </button>
           </div>
         )}
-
-        {/* System crons */}
-        {isLoading ? (
-          <div className="mt-8 text-center">
-            <span className="text-[12px] text-text-quaternary">Loading automations...</span>
-          </div>
-        ) : (
-          <SystemGroup crons={systemCrons} onRun={handleRun} />
-        )}
       </div>
-
-      {/* Create flow — natural language generation */}
-      {showCreate && (
-        <GenerateFlow
-          onClose={() => { setShowCreate(false); setPrefillDescription(undefined); }}
-          initialDescription={prefillDescription}
-        />
-      )}
     </div>
   );
 }

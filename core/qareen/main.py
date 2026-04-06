@@ -218,6 +218,45 @@ async def lifespan(app: FastAPI):
                 "Failed to wire companion to bus — companion SSE may be degraded"
             )
 
+    # Background pipelines — subscribe to stream events
+    if bus:
+        context_store = getattr(app.state, "context_store", None)
+        try:
+            from qareen.intelligence.pipelines import (
+                ActionDetectorPipeline,
+                EntityResolverPipeline,
+                ResearchTriggerPipeline,
+                VoiceResponderPipeline,
+            )
+
+            # Entity resolver (optionally with people adapter)
+            people_adapter = None
+            try:
+                from qareen.ontology.adapters.people import PeopleAdapter
+                people_adapter = PeopleAdapter(
+                    db_path=str(AOS_DATA / "data" / "qareen.db")
+                )
+            except Exception:
+                pass
+
+            entity_pipeline = EntityResolverPipeline(
+                bus, context_store, people_adapter=people_adapter
+            )
+            entity_pipeline.wire()
+
+            action_pipeline = ActionDetectorPipeline(bus, context_store)
+            action_pipeline.wire()
+
+            research_pipeline = ResearchTriggerPipeline(bus, context_store)
+            research_pipeline.wire()
+
+            voice_pipeline = VoiceResponderPipeline(bus, context_store)
+            voice_pipeline.wire()
+
+            logger.info("Background pipelines wired (entity, action, research, voice)")
+        except Exception:
+            logger.exception("Failed to wire background pipelines")
+
     # -- Register adapters -----------------------------------------------
 
     if ontology:

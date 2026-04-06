@@ -30,10 +30,9 @@ health:
     - name: app_exists
       type: app_exists
       path: /System/Applications/Messages.app
-    - name: applescript_access
-      type: command
-      command: "osascript -e 'tell application \"Messages\" to get name of services' 2>/dev/null"
-      description: Can read message services via AppleScript
+    - name: messages_data
+      type: file_exists
+      path: ~/Library/Messages/chat.db
 
 automation_ideas:
   - id: forward_important

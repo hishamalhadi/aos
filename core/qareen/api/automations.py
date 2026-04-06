@@ -196,6 +196,20 @@ async def run_automation(automation_id: str, request: Request) -> JSONResponse:
         workflow = await n8n_client.get_workflow(wf_id)
         nodes = workflow.get("nodes", [])
 
+        # Pre-flight: check all connectors are healthy
+        try:
+            sys.path.insert(0, str(AOS_HOME / "core"))
+            from automations.connector_bridge import validate_workflow_nodes
+            preflight = validate_workflow_nodes(nodes)
+            if not preflight.get("valid", True):
+                return JSONResponse({
+                    "status": "blocked",
+                    "reason": "integration_disconnected",
+                    "validation": preflight,
+                }, status_code=409)
+        except Exception:
+            logger.debug("Pre-flight check unavailable, proceeding")
+
         node_results = []
         node_outputs: dict = {}
 
@@ -859,3 +873,35 @@ async def n8n_error_callback(request: Request) -> JSONResponse:
 
     logger.warning("n8n error callback: workflow=%s error=%s", workflow_id, error_message)
     return JSONResponse({"received": True})
+
+
+@router.get("/{automation_id}/preflight")
+async def preflight_check(automation_id: str, request: Request) -> JSONResponse:
+    """Check if all integrations for an automation are healthy before running.
+
+    Returns per-node connection status and whether the automation is ready to run.
+    """
+    n8n_client = getattr(request.app.state, "n8n_client", None)
+    if not n8n_client:
+        return JSONResponse({"error": "n8n not available"}, status_code=503)
+
+    auto = _get_n8n_automation(automation_id)
+    if not auto or not auto.get("n8n_workflow_id"):
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    try:
+        workflow = await n8n_client.get_workflow(auto["n8n_workflow_id"])
+        nodes = workflow.get("nodes", [])
+
+        sys.path.insert(0, str(AOS_HOME / "core"))
+        from automations.connector_bridge import validate_workflow_nodes
+        validation = validate_workflow_nodes(nodes)
+
+        return JSONResponse({
+            "automation_id": automation_id,
+            "ready": validation.get("valid", True),
+            "validation": validation,
+        })
+    except Exception as e:
+        logger.exception("Pre-flight check failed")
+        return JSONResponse({"error": str(e)}, status_code=500)

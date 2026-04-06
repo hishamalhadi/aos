@@ -4,16 +4,18 @@
  * Shows when a node is clicked. Renders form fields based on
  * the node type's field schema from constants.ts.
  */
-import { useCallback, useEffect, useRef } from 'react';
-import { X, Zap, Clock, Send, Mail, Calendar, Sheet, Globe, GitBranch, Code, Edit, Webhook } from 'lucide-react';
+import { useCallback, useContext, useRef } from 'react';
+import { X, Zap, Clock, Send, Mail, Calendar, Sheet, Globe, GitBranch, Code, Edit, Webhook, Bot, Hand, Workflow, ExternalLink, Circle, AlertCircle } from 'lucide-react';
 import { useFlowEditor } from '../hooks/useFlowEditor';
 import { getNodeDef, CATEGORY_META } from '../constants';
+import { ConnectorContext } from '../ConnectorContext';
+import { getNodeConnectionStatus, statusDotColor } from '../../../hooks/useConnectorStatus';
 import type { FlowNodeData, FieldSchema } from '../types';
 
 const ICONS: Record<string, typeof Zap> = {
   clock: Clock, send: Send, mail: Mail, calendar: Calendar, sheet: Sheet,
   globe: Globe, 'git-branch': GitBranch, code: Code, edit: Edit, zap: Zap,
-  webhook: Webhook,
+  webhook: Webhook, bot: Bot, hand: Hand, workflow: Workflow,
 };
 
 function ConfigField({
@@ -96,6 +98,72 @@ function getNestedValue(obj: Record<string, unknown>, key: string): unknown {
     current = (current as Record<string, unknown>)[part];
   }
   return current;
+}
+
+function ConnectionSection({ n8nType, credentials }: { n8nType: string; credentials?: Record<string, unknown> }) {
+  const connectorNodeTypes = useContext(ConnectorContext);
+  const status = getNodeConnectionStatus(connectorNodeTypes, n8nType);
+  const info = connectorNodeTypes[n8nType];
+  const dotColor = statusDotColor(status);
+
+  if (status === 'always') {
+    // Show credentials if present, but no connection section needed
+    if (!credentials || Object.keys(credentials).length === 0) return null;
+    return (
+      <div className="mt-4 pt-3 border-t border-border">
+        <span className="text-[10px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2">
+          Credentials
+        </span>
+        {Object.entries(credentials).map(([type, ref]) => (
+          <div key={type} className="flex items-center gap-2 py-1">
+            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#30D158' }} />
+            <span className="text-[11px] text-text-tertiary">
+              {(ref as Record<string, unknown>)?.name as string || type}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-4 pt-3 border-t border-border">
+      <span className="text-[10px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2">
+        Connection
+      </span>
+      <div className="flex items-center gap-2 py-1">
+        <div className="w-2 h-2 rounded-full" style={{ backgroundColor: dotColor }} />
+        <span className="text-[11px] text-text-secondary font-[510]">
+          {info?.connector_name || n8nType.split('.').pop()}
+        </span>
+        <span className="text-[10px] text-text-quaternary ml-auto">
+          {status === 'connected' ? 'Connected' : status === 'partial' ? 'Partial' : status === 'broken' ? 'Broken' : 'Not configured'}
+        </span>
+      </div>
+      {(status === 'available' || status === 'broken') && (
+        <div className="mt-2 flex items-start gap-1.5 p-2 rounded-[5px] bg-[#FF453A]/8">
+          <AlertCircle className="w-3 h-3 text-[#FF453A] mt-0.5 flex-shrink-0" />
+          <span className="text-[10px] text-[#FF9F8A] leading-[14px]">
+            {status === 'broken'
+              ? 'Integration is broken. Check credentials and service health.'
+              : 'Integration not configured. Set up this connector before deploying.'}
+          </span>
+        </div>
+      )}
+      {credentials && Object.keys(credentials).length > 0 && (
+        <div className="mt-2">
+          <span className="text-[10px] text-text-quaternary block mb-1">Credentials</span>
+          {Object.entries(credentials).map(([type, ref]) => (
+            <div key={type} className="flex items-center gap-2 py-0.5">
+              <span className="text-[11px] text-text-tertiary">
+                {(ref as Record<string, unknown>)?.name as string || type}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function NodeConfigPanel() {
@@ -186,20 +254,30 @@ export default function NodeConfigPanel() {
         </div>
       )}
 
-      {/* Credentials */}
-      {data.credentials && Object.keys(data.credentials).length > 0 && (
+      {/* Connection & Credentials */}
+      <ConnectionSection n8nType={data.n8nType} credentials={data.credentials} />
+
+      {/* Agent dispatch details */}
+      {data.n8nType === 'aos.agentDispatch' && data.parameters?.agent_id && (
         <div className="mt-4 pt-3 border-t border-border">
           <span className="text-[10px] font-[590] text-text-quaternary uppercase tracking-[0.06em] block mb-2">
-            Credentials
+            Agent
           </span>
-          {Object.entries(data.credentials).map(([type, ref]) => (
-            <div key={type} className="flex items-center gap-2 py-1">
-              <div className="w-2 h-2 rounded-full bg-green-400" />
-              <span className="text-[11px] text-text-tertiary">
-                {(ref as Record<string, unknown>)?.name as string || type}
-              </span>
+          <div className="flex items-center gap-2 py-1">
+            <div className="w-5 h-5 rounded-[3px] bg-[#A855F7]/20 flex items-center justify-center">
+              <Bot className="w-3 h-3 text-[#A855F7]" />
             </div>
-          ))}
+            <span className="text-[12px] text-text-secondary font-[510]">
+              {String(data.parameters.agent_id)}
+            </span>
+          </div>
+          <a
+            href="/agents"
+            className="flex items-center gap-1 mt-2 text-[10px] text-accent hover:text-accent-hover transition-colors"
+          >
+            <ExternalLink className="w-3 h-3" />
+            Browse Agents
+          </a>
         </div>
       )}
 

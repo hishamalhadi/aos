@@ -97,6 +97,7 @@ core/infra/reconcile/
 - Test with both Homebrew Python and system Python 3.9 (some users only have 3.9)
 - **Never hardcode lists the filesystem declares.** When checking for services, skills, agents, or LaunchAgents — discover from the filesystem. Lists drift. Directories don't. ship-check enforces this.
 - **Destructive operations require operator approval.** Any operation that deletes files, removes services, or drops data must present what it will do and get explicit approval. No auto-delete. No "cleanup on fix." Report, then ask.
+- **Read `DESIGN.md` before any UI work.** Follow the design system exactly — glass pill tabs, warm tokens, no hardcoded colors. Never use a generic primitive when the design language specifies a pattern. Convenience does not override correctness.
 
 ## Vault Structure
 

@@ -648,6 +648,95 @@ export interface PipelineRunResponse {
   output: string
 }
 
+// Circles
+export interface CircleResponse {
+  id: string
+  name: string
+  category?: string
+  subcategory?: string
+  source?: string
+  confidence: number
+  member_count: number
+}
+export interface CircleListResponse {
+  circles: CircleResponse[]
+  total: number
+}
+export interface CircleMemberResponse {
+  person_id: string
+  name: string
+  importance: number
+  role_in_circle?: string
+  confidence: number
+}
+export interface CircleDetailResponse {
+  circle: CircleResponse
+  members: CircleMemberResponse[]
+}
+
+// Hygiene
+export interface HygieneIssueResponse {
+  id: string
+  action_type: string
+  person_a_id?: string
+  person_a_name?: string
+  person_b_id?: string
+  person_b_name?: string
+  confidence: number
+  reason?: string
+  proposed_data?: Record<string, unknown>
+  status: string
+  created_at?: string
+}
+export interface HygieneListResponse {
+  issues: HygieneIssueResponse[]
+  total: number
+}
+export interface HygieneStatsResponse {
+  total_pending: number
+  by_type: Record<string, number>
+  total_resolved: number
+}
+
+// Organizations
+export interface OrgResponse {
+  id: string
+  name: string
+  type?: string
+  domain?: string
+  industry?: string
+  city?: string
+  member_count: number
+}
+export interface OrgListResponse {
+  organizations: OrgResponse[]
+  total: number
+}
+export interface OrgMemberResponse {
+  person_id: string
+  name: string
+  role?: string
+  department?: string
+  importance: number
+}
+export interface OrgDetailResponse {
+  organization: OrgResponse
+  members: OrgMemberResponse[]
+}
+
+// Family Tree
+export interface FamilyEdge {
+  source_id: string
+  source_name: string
+  target_id: string
+  target_name: string
+  relationship: string
+}
+export interface FamilyTreeResponse {
+  edges: FamilyEdge[]
+  total: number
+}
+
 // -----------------------------------------------------------------------------
 // Vault
 // -----------------------------------------------------------------------------

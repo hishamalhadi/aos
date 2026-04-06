@@ -42,6 +42,10 @@ export function useCompanion() {
   const addApproval = useCompanionStore((s) => s.addApproval)
   const removeApproval = useCompanionStore((s) => s.removeApproval)
   const updateSessionTitle = useCompanionStore((s) => s.updateSessionTitle)
+  const addThread = useCompanionStore((s) => s.addThread)
+  const addUnitToThread = useCompanionStore((s) => s.addUnitToThread)
+  const setActiveThread = useCompanionStore((s) => s.setActiveThread)
+  const updateThreadSummary = useCompanionStore((s) => s.updateThreadSummary)
   const queryClient = useQueryClient()
 
   const retryCount = useRef(0)
@@ -294,6 +298,41 @@ export function useCompanion() {
         case 'companion_session_ended':
           setSession(null)
           break
+        case 'stream.unit': {
+          const u = d
+          addUnitToThread({
+            id: (u.id as string) ?? crypto.randomUUID(),
+            threadId: (u.thread_id as string) ?? '',
+            text: (u.text as string) ?? '',
+            speaker: (u.speaker as string) ?? '',
+            timestamp: (u.timestamp as string) ?? new Date().toISOString(),
+            classification: (u.classification as import('@/store/companion').ThoughtUnit['classification']) ?? 'context',
+            confidence: (u.confidence as number) ?? 0,
+            entities: (u.entities as string[]) ?? [],
+          })
+          break
+        }
+        case 'stream.thread_new': {
+          addThread({
+            id: (d.thread_id as string) ?? crypto.randomUUID(),
+            title: (d.title as string) ?? '',
+            summary: '',
+            isActive: true,
+            firstSeen: new Date().toISOString(),
+            lastSeen: new Date().toISOString(),
+          })
+          break
+        }
+        case 'stream.thread_switch': {
+          if (d.to) setActiveThread(d.to as string)
+          break
+        }
+        case 'stream.thread_update': {
+          if (d.thread_id && d.summary) {
+            updateThreadSummary(d.thread_id as string, d.summary as string)
+          }
+          break
+        }
       }
 
       // Track sequence number
@@ -318,6 +357,10 @@ export function useCompanion() {
       addApproval,
       removeApproval,
       updateSessionTitle,
+      addThread,
+      addUnitToThread,
+      setActiveThread,
+      updateThreadSummary,
       cardToApproval,
       queryClient,
     ],
@@ -703,6 +746,57 @@ export function useCompanion() {
       } catch { /* malformed event */ }
     })
 
+    // --- Thread visualization (v2) ---
+    es.addEventListener('stream.unit', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        trackSeq(d)
+        addUnitToThread({
+          id: d.id ?? crypto.randomUUID(),
+          threadId: d.thread_id ?? '',
+          text: d.text ?? '',
+          speaker: d.speaker ?? '',
+          timestamp: d.timestamp ?? new Date().toISOString(),
+          classification: d.classification ?? 'context',
+          confidence: d.confidence ?? 0,
+          entities: d.entities ?? [],
+        })
+      } catch { /* malformed event */ }
+    })
+
+    es.addEventListener('stream.thread_new', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        trackSeq(d)
+        addThread({
+          id: d.thread_id ?? crypto.randomUUID(),
+          title: d.title ?? '',
+          summary: '',
+          isActive: true,
+          firstSeen: new Date().toISOString(),
+          lastSeen: new Date().toISOString(),
+        })
+      } catch { /* malformed event */ }
+    })
+
+    es.addEventListener('stream.thread_switch', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        trackSeq(d)
+        if (d.to) setActiveThread(d.to)
+      } catch { /* malformed event */ }
+    })
+
+    es.addEventListener('stream.thread_update', (e) => {
+      try {
+        const d = JSON.parse(e.data)
+        trackSeq(d)
+        if (d.thread_id && d.summary) {
+          updateThreadSummary(d.thread_id, d.summary)
+        }
+      } catch { /* malformed event */ }
+    })
+
     // --- Reconnect on error ---
     es.onerror = () => {
       es.close()
@@ -728,6 +822,10 @@ export function useCompanion() {
     addApproval,
     removeApproval,
     updateSessionTitle,
+    addThread,
+    addUnitToThread,
+    setActiveThread,
+    updateThreadSummary,
     cardToApproval,
     replayEvent,
     queryClient,
@@ -903,6 +1001,8 @@ export function useCompanion() {
     session: useCompanionStore((s) => s.session),
     noteGroups: useCompanionStore((s) => s.noteGroups),
     approvals: useCompanionStore((s) => s.approvals),
+    threads: useCompanionStore((s) => s.threads),
+    activeThreadId: useCompanionStore((s) => s.activeThreadId),
   }
 }
 

@@ -1,5 +1,6 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useRegisterPageActions, type PageAction } from '@/hooks/usePageActions';
 import TasksContent from '@/pages/Tasks';
 import ProjectsContent from '@/pages/Projects';
 import AnalyticsContent from '@/pages/Analytics';
@@ -25,6 +26,18 @@ export default function WorkPage() {
     setActiveTab('tasks');
     setSearchParams({ tab: 'tasks', project: projectId }, { replace: true });
   }, [setSearchParams]);
+
+  // Register page actions for quick-assist
+  const pageActions: PageAction[] = useMemo(() => [
+    {
+      id: 'work.switch_tab',
+      label: 'Switch Work tab',
+      category: 'navigate',
+      params: [{ name: 'tab', type: 'enum' as const, required: true, description: 'Tab to switch to', options: ['today', 'tasks', 'projects', 'goals'] }],
+      execute: ({ tab }) => handleTabChange(tab as WorkTab),
+    },
+  ], [handleTabChange])
+  useRegisterPageActions(pageActions)
 
   return (
     <div className="h-full flex flex-col">
