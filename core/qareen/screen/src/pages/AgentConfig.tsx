@@ -71,6 +71,105 @@ const FAILURE_OPTIONS = [
   { value: 'degrade', label: 'Degrade' },
 ];
 
+// ── Tools field — smart mode: allowlist vs blocklist ──
+
+type ToolMode = 'all' | 'allow' | 'block';
+
+function ToolsField({ tools, disallowed, available, onToolsChange, onDisallowedChange, disabled }: {
+  tools: string[];
+  disallowed: string[];
+  available: string[];
+  onToolsChange: (v: string[]) => void;
+  onDisallowedChange: (v: string[]) => void;
+  disabled?: boolean;
+}) {
+  // Detect current mode from data
+  const hasWildcard = tools.includes('*');
+  const hasAllowlist = tools.length > 0 && !hasWildcard;
+  const hasBlocklist = disallowed.length > 0;
+
+  const initialMode: ToolMode = hasWildcard ? (hasBlocklist ? 'block' : 'all')
+    : hasAllowlist ? 'allow'
+    : hasBlocklist ? 'block'
+    : 'all';
+
+  const [mode, setMode] = useState<ToolMode>(initialMode);
+
+  const handleModeChange = (newMode: ToolMode) => {
+    setMode(newMode);
+    if (newMode === 'all') {
+      onToolsChange(['*']);
+      onDisallowedChange([]);
+    } else if (newMode === 'allow') {
+      // Switch to allowlist — start with current tools if any, else empty
+      if (hasWildcard) onToolsChange([]);
+      onDisallowedChange([]);
+    } else {
+      // Switch to blocklist — inherit all, block specific
+      onToolsChange(['*']);
+      // Keep existing blocklist
+    }
+  };
+
+  return (
+    <div>
+      <label className="block text-[11px] font-[510] text-text-quaternary mb-2">
+        Tool access
+      </label>
+
+      {/* Mode toggle */}
+      <div className="flex items-center gap-0.5 mb-3 bg-[rgba(255,245,235,0.03)] rounded-lg p-0.5 w-fit">
+        {([
+          ['all', 'All tools'],
+          ['allow', 'Allow specific'],
+          ['block', 'Block specific'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            onClick={() => !disabled && handleModeChange(key)}
+            className={`h-6 px-2.5 rounded-md text-[11px] font-[510] cursor-pointer transition-all duration-100 ${
+              mode === key
+                ? 'bg-[rgba(255,245,235,0.08)] text-text'
+                : 'text-text-quaternary hover:text-text-tertiary'
+            } ${disabled ? 'opacity-50 cursor-default' : ''}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Context-dependent picker */}
+      {mode === 'all' && (
+        <p className="text-[12px] text-text-tertiary">
+          This agent can use all available tools.
+        </p>
+      )}
+      {mode === 'allow' && (
+        <div>
+          <p className="text-[11px] text-text-quaternary mb-2">Only these tools are available:</p>
+          <TagPicker
+            selected={hasWildcard ? [] : tools}
+            available={available}
+            onChange={onToolsChange}
+            disabled={disabled}
+          />
+        </div>
+      )}
+      {mode === 'block' && (
+        <div>
+          <p className="text-[11px] text-text-quaternary mb-2">All tools except:</p>
+          <TagPicker
+            selected={disallowed}
+            available={available}
+            onChange={onDisallowedChange}
+            disabled={disabled}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Helper: deep compare for dirty state ──
 
 function formDiffers(form: Partial<AgentConfig>, original: AgentConfig): boolean {
@@ -300,29 +399,14 @@ export default function AgentConfigPage() {
               disabled={disabled}
             />
 
-            <div>
-              <label className="block text-[11px] font-[510] text-text-quaternary mb-1.5">
-                Tools
-              </label>
-              <TagPicker
-                selected={form.tools ?? config.tools}
-                available={options.tools}
-                onChange={(v) => updateField('tools', v)}
-                disabled={disabled}
-              />
-            </div>
-
-            <div>
-              <label className="block text-[11px] font-[510] text-text-quaternary mb-1.5">
-                Disallowed tools
-              </label>
-              <TagPicker
-                selected={form.disallowed_tools ?? config.disallowed_tools}
-                available={options.tools}
-                onChange={(v) => updateField('disallowed_tools', v)}
-                disabled={disabled}
-              />
-            </div>
+            <ToolsField
+              tools={form.tools ?? config.tools}
+              disallowed={form.disallowed_tools ?? config.disallowed_tools}
+              available={options.tools}
+              onToolsChange={(v) => updateField('tools', v)}
+              onDisallowedChange={(v) => updateField('disallowed_tools', v)}
+              disabled={disabled}
+            />
 
             <div>
               <label className="block text-[11px] font-[510] text-text-quaternary mb-1.5">
