@@ -222,32 +222,99 @@ def _sync_to_mcp_json(connectors_data: dict[str, Any]) -> None:
 
 @router.get("/credentials")
 async def list_credentials() -> dict[str, Any]:
-    """List credential manifest with keychain presence check."""
+    """List ALL credentials from keychain, enriched with manifest metadata."""
+    # 1. Load manifest for descriptions/usage metadata
     data = _load_yaml(CREDENTIALS_FILE)
-    creds = data.get("credentials", {})
+    manifest = data.get("credentials", {})
 
+    # 2. Discover all entries from keychain
+    agent_secret = str(Path.home() / "aos" / "core" / "bin" / "cli" / "agent-secret")
+    keychain_names: list[str] = []
+    try:
+        r = subprocess.run([agent_secret, "list"], capture_output=True, text=True, timeout=10)
+        if r.returncode == 0:
+            seen: set[str] = set()
+            for line in r.stdout.strip().split("\n"):
+                name = line.strip()
+                if name and name not in seen:
+                    seen.add(name)
+                    keychain_names.append(name)
+    except Exception:
+        pass
+
+    # 3. Merge: keychain entries + manifest metadata
     result = []
-    for name, cfg in creds.items():
-        # Check if actually in keychain
-        present = False
-        try:
-            r = subprocess.run(
-                [str(Path.home() / "aos" / "core" / "bin" / "cli" / "agent-secret"), "get", name],
-                capture_output=True, timeout=5,
-            )
-            present = r.returncode == 0
-        except Exception:
-            pass
-
+    for name in sorted(keychain_names):
+        meta = manifest.get(name, {})
         result.append({
             "name": name,
-            "description": cfg.get("description", ""),
-            "used_by": cfg.get("used_by", {}),
-            "created": cfg.get("created"),
-            "present": present,
+            "description": meta.get("description", _infer_description(name)),
+            "used_by": meta.get("used_by", _infer_usage(name)),
+            "created": meta.get("created"),
+            "present": True,
+            "category": _infer_category(name),
         })
 
+    # Also add manifest entries that are NOT in keychain (missing credentials)
+    for name, meta in manifest.items():
+        if name not in {r["name"] for r in result}:
+            result.append({
+                "name": name,
+                "description": meta.get("description", ""),
+                "used_by": meta.get("used_by", {}),
+                "created": meta.get("created"),
+                "present": False,
+                "category": _infer_category(name),
+            })
+
     return {"credentials": result, "total": len(result)}
+
+
+def _infer_category(name: str) -> str:
+    """Infer credential category from name."""
+    n = name.upper()
+    if any(k in n for k in ["API_KEY", "API_TOKEN", "ACCESS_TOKEN", "SECRET"]):
+        return "api"
+    if any(k in n for k in ["OAUTH", "CLIENT_ID", "CLIENT_SECRET"]):
+        return "oauth"
+    if any(k in n for k in ["BOT_TOKEN", "CHAT_ID", "WEBHOOK"]):
+        return "messaging"
+    if any(k in n for k in ["EMAIL", "PASSWORD", "ADMIN"]):
+        return "account"
+    return "other"
+
+
+def _infer_description(name: str) -> str:
+    """Generate a human-readable description from credential name."""
+    parts = name.replace("-", "_").split("_")
+    # Common patterns
+    service = parts[0].title() if parts else name
+    kind = " ".join(p.title() for p in parts[1:]) if len(parts) > 1 else ""
+    return f"{service} {kind}".strip()
+
+
+def _infer_usage(name: str) -> dict[str, list[str]]:
+    """Guess which connectors/providers use this credential."""
+    n = name.upper()
+    connectors: list[str] = []
+    providers: list[str] = []
+
+    if "OPENROUTER" in n: providers.append("openrouter")
+    if "ANTHROPIC" in n: providers.append("anthropic")
+    if "ELEVENLABS" in n or "11LABS" in n: connectors.append("elevenlabs")
+    if "SLACK" in n: connectors.append("slack")
+    if "TELEGRAM" in n: connectors.append("telegram")
+    if "SHOPIFY" in n: connectors.append("shopify")
+    if "PAYPAL" in n: connectors.append("paypal")
+    if "WAVE" in n: connectors.append("wave-accounting")
+    if "GOOGLE" in n: connectors.append("google-workspace")
+    if "CHITCHATS" in n: connectors.append("chitchats")
+    if "N8N" in n: connectors.append("n8n")
+
+    result: dict[str, list[str]] = {}
+    if providers: result["providers"] = providers
+    if connectors: result["connectors"] = connectors
+    return result
 
 
 # ---------------------------------------------------------------------------
