@@ -1,4 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMemo } from 'react';
+import { useProviders, type Provider } from './useIntegrations';
 
 const API = '/api';
 
@@ -170,4 +172,63 @@ export function useAgentHealth(id: string | null) {
     enabled: !!id,
     staleTime: 30_000,
   });
+}
+
+// ── Provider-aware model picker ──
+
+export interface ModelOption {
+  value: string;        // e.g. "sonnet" or "openrouter/google/gemini-2.5-pro"
+  label: string;        // e.g. "Claude Code → Sonnet"
+  provider: string;     // e.g. "Claude Code"
+  providerType: string; // e.g. "harness"
+}
+
+/** Provider types that offer selectable LLM models */
+const MODEL_PROVIDER_TYPES = new Set(['harness', 'api', 'gateway', 'local']);
+
+function buildModelOptions(providers: Provider[]): ModelOption[] {
+  const options: ModelOption[] = [];
+
+  for (const p of providers) {
+    if (p.status !== 'active') continue;
+    if (!MODEL_PROVIDER_TYPES.has(p.type)) continue;
+    if (p.models.length === 0) continue;
+
+    for (const model of p.models) {
+      // Harness models stay as bare aliases (opus, sonnet, haiku)
+      // Other providers prefix with provider id
+      const value = p.type === 'harness' ? model : `${p.id}/${model}`;
+      const label = `${p.display_name} \u2192 ${model}`;
+
+      options.push({ value, label, provider: p.display_name, providerType: p.type });
+    }
+  }
+
+  return options;
+}
+
+/** Flat list of model options grouped by active provider, with "inherit" first. */
+export function useProviderModels(): ModelOption[] {
+  const { data: providers } = useProviders();
+
+  return useMemo(() => {
+    const inherit: ModelOption = {
+      value: 'inherit',
+      label: 'Inherit (parent model)',
+      provider: '',
+      providerType: '',
+    };
+
+    if (!providers || providers.length === 0) {
+      // Fallback: at minimum show harness defaults so the picker is never empty
+      return [
+        inherit,
+        { value: 'opus', label: 'Opus', provider: 'Claude Code', providerType: 'harness' },
+        { value: 'sonnet', label: 'Sonnet', provider: 'Claude Code', providerType: 'harness' },
+        { value: 'haiku', label: 'Haiku', provider: 'Claude Code', providerType: 'harness' },
+      ];
+    }
+
+    return [inherit, ...buildModelOptions(providers)];
+  }, [providers]);
 }

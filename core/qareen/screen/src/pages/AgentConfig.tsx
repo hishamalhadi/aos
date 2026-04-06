@@ -12,6 +12,7 @@ import NumberField from '@/components/agents/NumberField';
 import KeyValueEditor from '@/components/agents/KeyValueEditor';
 import {
   useAgentConfig, useSaveConfig, useAgentOptions, useAgentHealth,
+  useProviderModels,
   type AgentConfig,
 } from '@/hooks/useAgentConfig';
 import type { ReactNode } from 'react';
@@ -19,13 +20,6 @@ import type { ReactNode } from 'react';
 // ============================================================
 // Constants
 // ============================================================
-
-const MODEL_OPTIONS = [
-  { value: 'inherit', label: 'Inherit (parent model)' },
-  { value: 'opus', label: 'Opus' },
-  { value: 'sonnet', label: 'Sonnet' },
-  { value: 'haiku', label: 'Haiku' },
-];
 
 const PERMISSION_OPTIONS = [
   { value: 'default', label: 'Default — ask for risky actions' },
@@ -195,6 +189,11 @@ export default function AgentConfigPage() {
   const { data: config, isLoading, error } = useAgentConfig(id ?? null);
   const options = useAgentOptions();
   const saveMutation = useSaveConfig();
+  const providerModels = useProviderModels();
+  const modelOptions = useMemo(
+    () => providerModels.map(m => ({ value: m.value, label: m.label })),
+    [providerModels],
+  );
 
   const [tab, setTab] = useState<TabId>('capabilities');
   const [form, setForm] = useState<Partial<AgentConfig>>({});
@@ -327,7 +326,7 @@ export default function AgentConfigPage() {
         <div className="max-w-[640px] mx-auto pt-4 space-y-6">
 
           {tab === 'capabilities' && (<>
-            <SelectField label="Model" value={form.model ?? config.model} options={MODEL_OPTIONS}
+            <SelectField label="Model" value={form.model ?? config.model} options={modelOptions}
               onChange={v => updateField('model', v)} disabled={disabled} />
 
             <ToolsField tools={form.tools ?? config.tools} disallowed={form.disallowed_tools ?? config.disallowed_tools}

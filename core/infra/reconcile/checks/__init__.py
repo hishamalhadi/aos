@@ -1,4 +1,5 @@
 from .claude_defaults import ClaudeDefaultsCheck
+from .connectors import ConnectorSyncCheck
 from .claude_md import GlobalClaudeMdCheck, RootClaudeMdCheck
 from .context_freshness import ContextFreshnessCheck
 from .dead_code import DeadCodeCheck
@@ -43,6 +44,9 @@ ALL_CHECKS = [
 
     # Integrations — MCP servers for external services
     GoogleWorkspaceCheck,
+
+    # Connectors — sync canonical config to Claude Code mcp.json
+    ConnectorSyncCheck,
 
     # Content — CLAUDE.md managed sections are current
     RootClaudeMdCheck,
