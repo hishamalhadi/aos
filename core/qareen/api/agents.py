@@ -65,6 +65,7 @@ SYSTEM_DEFAULTS: dict[str, dict[str, Any]] = {
         "model": "opus",
         "reports_to": None,
         "scope": "global",
+        "skills": ["recall", "work", "review", "step-by-step", "deliberate", "extract", "telegram-admin", "ramble", "ship"],
     },
     "advisor": {
         "role": "Strategy & Analysis",
@@ -73,6 +74,7 @@ SYSTEM_DEFAULTS: dict[str, dict[str, Any]] = {
         "model": "opus",
         "reports_to": "chief",
         "scope": "global",
+        "skills": ["recall", "review", "deliberate", "session-analysis"],
     },
     "steward": {
         "role": "System Health",
@@ -80,6 +82,7 @@ SYSTEM_DEFAULTS: dict[str, dict[str, Any]] = {
         "initials": "ST",
         "reports_to": "chief",
         "scope": "global",
+        "skills": ["systematic-debugging", "bridge-ops", "report"],
     },
 }
 
@@ -151,6 +154,7 @@ def _parse_agent_md(path: Path, *, source: str = "catalog") -> dict[str, Any]:
     # System agents
     system_agents = {"chief", "steward", "advisor"}
     is_system = agent_id in system_agents
+    sys_defaults = SYSTEM_DEFAULTS.get(agent_id, {})
 
     # Determine source
     if is_system:
@@ -158,14 +162,16 @@ def _parse_agent_md(path: Path, *, source: str = "catalog") -> dict[str, Any]:
     elif agent_id.startswith("c-"):
         source = "community"
 
-    # Normalize tools and skills to lists
+    # Normalize tools, skills, mcp to lists
     raw_tools = frontmatter.get("tools", [])
     if isinstance(raw_tools, str):
         raw_tools = [raw_tools] if raw_tools != "*" else ["*"]
     elif not isinstance(raw_tools, list):
         raw_tools = []
 
-    raw_skills = frontmatter.get("skills", [])
+    raw_skills = frontmatter.get("skills", None)
+    if raw_skills is None:
+        raw_skills = sys_defaults.get("skills", [])
     if isinstance(raw_skills, str):
         raw_skills = [raw_skills]
     elif not isinstance(raw_skills, list):
@@ -176,9 +182,6 @@ def _parse_agent_md(path: Path, *, source: str = "catalog") -> dict[str, Any]:
         raw_mcp = [raw_mcp]
     elif not isinstance(raw_mcp, list):
         raw_mcp = []
-
-    # Role, color, initials — from frontmatter, system defaults, or generated
-    sys_defaults = SYSTEM_DEFAULTS.get(agent_id, {})
 
     role = frontmatter.get("role", sys_defaults.get("role", ""))
     color = frontmatter.get("color", sys_defaults.get("color", ""))
