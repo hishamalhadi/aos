@@ -24,8 +24,11 @@ from fastapi.responses import JSONResponse
 
 from .schemas import (
     AgentCatalogResponse,
+    AgentHealthResponse,
     AgentListResponse,
+    AgentOptionsResponse,
     AgentResponse,
+    UpdateAgentConfigRequest,
     UpdateTrustRequest,
 )
 
@@ -55,6 +58,59 @@ def _save_trust(data: dict[str, int]) -> None:
     import json
     TRUST_FILE.parent.mkdir(parents=True, exist_ok=True)
     TRUST_FILE.write_text(json.dumps(data, indent=2))
+
+
+AOS_ROOT = Path.home() / "aos"
+
+
+def _normalize_list(val: Any) -> list[str]:
+    """Coerce a value to a list of strings."""
+    if isinstance(val, str):
+        return [val]
+    if isinstance(val, list):
+        return [str(v) for v in val]
+    return []
+
+
+def _find_agent_path(agent_id: str) -> Path | None:
+    """Find the .md file for an agent across all directories."""
+    for d in [INSTALLED_DIR, SYSTEM_DIR, CATALOG_DIR]:
+        for candidate in [d / f"{agent_id}.md", d / agent_id / "agent.md"]:
+            if candidate.is_file():
+                return candidate
+    return None
+
+
+def _is_system_symlink(path: Path) -> bool:
+    """Check whether an agent file is a system agent (symlink or in system dir)."""
+    return path.is_symlink() or str(path).startswith(str(SYSTEM_DIR))
+
+
+_FIELD_TO_YAML_KEY: dict[str, str] = {
+    "mcp_servers": "mcpServers",
+    "reports_to": "reportsTo",
+    "permission_mode": "permissionMode",
+    "max_turns": "maxTurns",
+    "can_spawn": "canSpawn",
+    "on_failure": "onFailure",
+    "max_retries": "maxRetries",
+    "self_contained": "selfContained",
+    "disallowed_tools": "disallowedTools",
+    "default_trust": "defaultTrust",
+}
+
+
+def _rebuild_agent_md(frontmatter: dict, body: str) -> str:
+    """Rebuild an agent .md file from frontmatter dict and body markdown."""
+    import yaml
+    yaml_str = yaml.dump(
+        frontmatter,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    return f"---\n{yaml_str}---\n{body}"
+
 
 # System agent defaults (for .md files that lack rich frontmatter)
 SYSTEM_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -217,6 +273,30 @@ def _parse_agent_md(path: Path, *, source: str = "catalog") -> dict[str, Any]:
         "is_active": True,
         "schedule": frontmatter.get("schedule", {}) if isinstance(frontmatter.get("schedule"), dict) else {},
         "source_path": str(path),
+        # Permissions & execution
+        "permission_mode": frontmatter.get("permissionMode", frontmatter.get("permission_mode", "default")),
+        "max_turns": frontmatter.get("maxTurns", frontmatter.get("max_turns", None)),
+        "effort": frontmatter.get("effort", ""),
+        # Orchestration
+        "can_spawn": _normalize_list(frontmatter.get("canSpawn", frontmatter.get("can_spawn", []))),
+        "disallowed_tools": _normalize_list(frontmatter.get("disallowedTools", frontmatter.get("disallowed_tools", []))),
+        "isolation": frontmatter.get("isolation", ""),
+        "background": bool(frontmatter.get("background", False)),
+        "memory": frontmatter.get("memory", ""),
+        # Context & dependencies
+        "rules": _normalize_list(frontmatter.get("rules", [])),
+        "parameters": frontmatter.get("parameters", {}) if isinstance(frontmatter.get("parameters"), dict) else {},
+        "services": _normalize_list(frontmatter.get("services", [])),
+        "prerequisites": _normalize_list(frontmatter.get("prerequisites", [])),
+        # Failure & data flow
+        "on_failure": frontmatter.get("onFailure", frontmatter.get("on_failure", "escalate")),
+        "max_retries": int(frontmatter.get("maxRetries", frontmatter.get("max_retries", 0))),
+        "inputs": _normalize_list(frontmatter.get("inputs", [])),
+        "outputs": _normalize_list(frontmatter.get("outputs", [])),
+        # Metadata
+        "self_contained": bool(frontmatter.get("selfContained", frontmatter.get("self_contained", False))),
+        "version": str(frontmatter.get("version", "1.0")),
+        "body": body,
     }
 
 
@@ -245,7 +325,11 @@ def _discover_agents(directory: Path, *, source: str = "catalog") -> list[dict[s
     return agents
 
 
-def _to_response(a: dict[str, Any], trust_map: dict[str, int] | None = None) -> AgentResponse:
+def _to_response(
+    a: dict[str, Any],
+    trust_map: dict[str, int] | None = None,
+    include_body: bool = False,
+) -> AgentResponse:
     """Convert parsed agent dict to API response."""
     trust = (trust_map or {}).get(a["id"])
     return AgentResponse(
@@ -267,6 +351,30 @@ def _to_response(a: dict[str, Any], trust_map: dict[str, int] | None = None) -> 
         is_system=a.get("is_system", False),
         is_active=a.get("is_active", True),
         schedule=a.get("schedule", {}),
+        # Permissions & execution
+        permission_mode=a.get("permission_mode", "default"),
+        max_turns=a.get("max_turns"),
+        effort=a.get("effort", ""),
+        # Orchestration
+        can_spawn=a.get("can_spawn", []),
+        disallowed_tools=a.get("disallowed_tools", []),
+        isolation=a.get("isolation", ""),
+        background=a.get("background", False),
+        memory=a.get("memory", ""),
+        # Context & dependencies
+        rules=a.get("rules", []),
+        parameters=a.get("parameters", {}),
+        services=a.get("services", []),
+        prerequisites=a.get("prerequisites", []),
+        # Failure & data flow
+        on_failure=a.get("on_failure", "escalate"),
+        max_retries=a.get("max_retries", 0),
+        inputs=a.get("inputs", []),
+        outputs=a.get("outputs", []),
+        # Metadata
+        self_contained=a.get("self_contained", False),
+        version=a.get("version", "1.0"),
+        body=a.get("body") if include_body else None,
     )
 
 
@@ -317,6 +425,131 @@ async def list_catalog(request: Request) -> AgentCatalogResponse:
         catalog=available,
         total=len(available),
     )
+
+
+# ---------------------------------------------------------------------------
+# Options endpoints — MUST be before /{agent_id} to avoid path conflicts
+# ---------------------------------------------------------------------------
+
+
+@router.get("/options/tools", response_model=AgentOptionsResponse)
+async def list_tool_options() -> AgentOptionsResponse:
+    """List available tools: built-in Claude Code tools + MCP tools."""
+    import json
+
+    # Built-in Claude Code tools
+    tools = [
+        "Agent", "Bash", "Edit", "Glob", "Grep", "Read", "Write",
+        "NotebookEdit", "TodoRead", "TodoWrite", "WebFetch", "WebSearch",
+    ]
+
+    # Add MCP tools from mcp.json
+    mcp_json = Path.home() / ".claude" / "mcp.json"
+    if mcp_json.is_file():
+        try:
+            mcp_data = json.loads(mcp_json.read_text())
+            servers = mcp_data.get("mcpServers", {})
+            for server_name in servers:
+                tools.append(f"mcp__{server_name}")
+        except Exception:
+            pass
+
+    tools.sort()
+    return AgentOptionsResponse(items=tools, total=len(tools))
+
+
+@router.get("/options/skills", response_model=AgentOptionsResponse)
+async def list_skill_options() -> AgentOptionsResponse:
+    """List available skills from ~/.claude/skills/."""
+    skills_dir = Path.home() / ".claude" / "skills"
+    skills: list[str] = []
+
+    if skills_dir.is_dir():
+        for entry in skills_dir.iterdir():
+            if entry.is_dir() and (entry / "SKILL.md").is_file():
+                skills.append(entry.name)
+
+    skills.sort()
+    return AgentOptionsResponse(items=skills, total=len(skills))
+
+
+@router.get("/options/mcp-servers", response_model=AgentOptionsResponse)
+async def list_mcp_options() -> AgentOptionsResponse:
+    """List configured MCP servers from ~/.claude/mcp.json."""
+    import json
+
+    mcp_json = Path.home() / ".claude" / "mcp.json"
+    servers: list[str] = []
+
+    if mcp_json.is_file():
+        try:
+            mcp_data = json.loads(mcp_json.read_text())
+            servers = sorted(mcp_data.get("mcpServers", {}).keys())
+        except Exception:
+            pass
+
+    return AgentOptionsResponse(items=servers, total=len(servers))
+
+
+@router.get("/options/rules", response_model=AgentOptionsResponse)
+async def list_rule_options() -> AgentOptionsResponse:
+    """List available rule files from ~/.claude/rules/ and ~/aos/.claude/rules/."""
+    rules: list[str] = []
+    search_dirs = [
+        Path.home() / ".claude" / "rules",
+        AOS_ROOT / ".claude" / "rules",
+    ]
+
+    for rules_dir in search_dirs:
+        if rules_dir.is_dir():
+            for entry in rules_dir.iterdir():
+                if entry.suffix == ".md" and entry.is_file():
+                    rules.append(entry.stem)
+
+    rules = sorted(set(rules))
+    return AgentOptionsResponse(items=rules, total=len(rules))
+
+
+@router.get("/options/services", response_model=AgentOptionsResponse)
+async def list_service_options() -> AgentOptionsResponse:
+    """List AOS services from LaunchAgents plists."""
+    import glob as glob_mod
+
+    pattern = str(Path.home() / "Library" / "LaunchAgents" / "com.aos.*.plist")
+    services: list[str] = []
+
+    for plist_path in glob_mod.glob(pattern):
+        name = Path(plist_path).stem
+        # Strip com.aos. prefix
+        if name.startswith("com.aos."):
+            services.append(name[8:])
+
+    services.sort()
+    return AgentOptionsResponse(items=services, total=len(services))
+
+
+@router.get("/options/agents", response_model=AgentOptionsResponse)
+async def list_agent_options() -> AgentOptionsResponse:
+    """List all known agent IDs across installed, system, and catalog dirs."""
+    agent_ids: set[str] = set()
+
+    for directory in [INSTALLED_DIR, SYSTEM_DIR, CATALOG_DIR]:
+        if not directory.is_dir():
+            continue
+        for entry in directory.iterdir():
+            if entry.suffix == ".md" and entry.is_file():
+                if not entry.stem.startswith("-") and not entry.stem.startswith("."):
+                    agent_ids.add(entry.stem)
+            elif entry.is_dir() and (entry / "agent.md").is_file():
+                agent_ids.add(entry.name)
+
+    items = sorted(agent_ids)
+    return AgentOptionsResponse(items=items, total=len(items))
+
+
+# ---------------------------------------------------------------------------
+# Agent detail + config endpoints
+# ---------------------------------------------------------------------------
 
 
 @router.get("/{agent_id}", response_model=AgentResponse)
@@ -525,3 +758,176 @@ async def dispatch_agent(request: Request) -> JSONResponse:
             "status": "timeout",
             "duration_ms": duration_ms,
         }, status_code=504)
+
+
+# ---------------------------------------------------------------------------
+# Config read/write + health
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{agent_id}/config", response_model=AgentResponse)
+async def get_agent_config(
+    request: Request,
+    agent_id: str = PathParam(..., description="Agent identifier"),
+) -> AgentResponse | JSONResponse:
+    """Get full agent config including the system prompt body."""
+    path = _find_agent_path(agent_id)
+    if path is None:
+        return JSONResponse({"error": f"Agent not found: {agent_id}"}, status_code=404)
+
+    source = "system" if agent_id in {"chief", "steward", "advisor"} else "catalog"
+    data = _parse_agent_md(path, source=source)
+    if not data:
+        return JSONResponse({"error": f"Could not parse agent: {agent_id}"}, status_code=500)
+
+    trust_map = _load_trust()
+    return _to_response(data, trust_map, include_body=True)
+
+
+@router.patch("/{agent_id}/config", response_model=AgentResponse)
+async def update_agent_config(
+    body: UpdateAgentConfigRequest,
+    request: Request,
+    agent_id: str = PathParam(..., description="Agent identifier"),
+) -> AgentResponse | JSONResponse:
+    """Update agent config by writing back to the .md file.
+
+    System agents (symlinks or in core/agents/) return 403.
+    """
+    import yaml
+
+    path = _find_agent_path(agent_id)
+    if path is None:
+        return JSONResponse({"error": f"Agent not found: {agent_id}"}, status_code=404)
+
+    if _is_system_symlink(path):
+        return JSONResponse(
+            {"error": f"Cannot modify system agent '{agent_id}'. Copy to catalog first."},
+            status_code=403,
+        )
+
+    # Read current file
+    try:
+        content = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return JSONResponse({"error": f"Cannot read agent file: {exc}"}, status_code=500)
+
+    # Parse existing frontmatter + body
+    frontmatter: dict[str, Any] = {}
+    file_body = content
+    if content.startswith("---"):
+        end = content.find("---", 3)
+        if end != -1:
+            raw_yaml = content[3:end].strip()
+            file_body = content[end + 3:].lstrip("\n")
+            try:
+                fm = yaml.safe_load(raw_yaml)
+                if isinstance(fm, dict):
+                    frontmatter = fm
+            except Exception:
+                pass
+
+    # Apply updates from the request
+    updates = body.model_dump(exclude_none=True)
+    new_body = updates.pop("body", None)
+    if new_body is not None:
+        file_body = new_body
+
+    for field_name, value in updates.items():
+        yaml_key = _FIELD_TO_YAML_KEY.get(field_name, field_name)
+        frontmatter[yaml_key] = value
+
+    # Write back
+    rebuilt = _rebuild_agent_md(frontmatter, file_body)
+    try:
+        path.write_text(rebuilt, encoding="utf-8")
+    except OSError as exc:
+        return JSONResponse({"error": f"Cannot write agent file: {exc}"}, status_code=500)
+
+    logger.info("Updated config for agent '%s' at %s", agent_id, path)
+
+    # Re-parse and return
+    source = "system" if agent_id in {"chief", "steward", "advisor"} else "catalog"
+    data = _parse_agent_md(path, source=source)
+    if not data:
+        return JSONResponse({"error": "Failed to re-parse agent after update"}, status_code=500)
+
+    trust_map = _load_trust()
+    return _to_response(data, trust_map, include_body=True)
+
+
+@router.get("/{agent_id}/health", response_model=AgentHealthResponse)
+async def get_agent_health(
+    request: Request,
+    agent_id: str = PathParam(..., description="Agent identifier"),
+) -> AgentHealthResponse | JSONResponse:
+    """Check health of an agent's dependencies (MCP servers, services, skills, rules)."""
+    import json
+
+    from .services import KNOWN_SERVICES, _check_launchctl
+
+    path = _find_agent_path(agent_id)
+    if path is None:
+        return JSONResponse({"error": f"Agent not found: {agent_id}"}, status_code=404)
+
+    source = "system" if agent_id in {"chief", "steward", "advisor"} else "catalog"
+    data = _parse_agent_md(path, source=source)
+    if not data:
+        return JSONResponse({"error": f"Could not parse agent: {agent_id}"}, status_code=500)
+
+    checks: list[dict[str, Any]] = []
+    all_healthy = True
+
+    # Check MCP servers
+    mcp_json = Path.home() / ".claude" / "mcp.json"
+    configured_mcps: set[str] = set()
+    if mcp_json.is_file():
+        try:
+            configured_mcps = set(json.loads(mcp_json.read_text()).get("mcpServers", {}).keys())
+        except Exception:
+            pass
+
+    for server in data.get("mcp_servers", []):
+        ok = server in configured_mcps
+        checks.append({"type": "mcp_server", "name": server, "ok": ok, "message": "configured" if ok else "not found in mcp.json"})
+        if not ok:
+            all_healthy = False
+
+    # Check services
+    for svc in data.get("services", []):
+        if svc in KNOWN_SERVICES:
+            label = KNOWN_SERVICES[svc].get("label", f"com.aos.{svc}")
+            result = _check_launchctl(label)
+            ok = result.get("status") == "running"
+            checks.append({"type": "service", "name": svc, "ok": ok, "message": result.get("status", "unknown")})
+            if not ok:
+                all_healthy = False
+        else:
+            checks.append({"type": "service", "name": svc, "ok": False, "message": "unknown service"})
+            all_healthy = False
+
+    # Check skills
+    skills_dir = Path.home() / ".claude" / "skills"
+    for skill in data.get("skills", []):
+        skill_path = skills_dir / skill / "SKILL.md"
+        ok = skill_path.is_file()
+        checks.append({"type": "skill", "name": skill, "ok": ok, "message": "found" if ok else "SKILL.md missing"})
+        if not ok:
+            all_healthy = False
+
+    # Check rules
+    for rule in data.get("rules", []):
+        found = False
+        for rules_dir in [Path.home() / ".claude" / "rules", AOS_ROOT / ".claude" / "rules"]:
+            if (rules_dir / f"{rule}.md").is_file():
+                found = True
+                break
+        checks.append({"type": "rule", "name": rule, "ok": found, "message": "found" if found else "rule file missing"})
+        if not found:
+            all_healthy = False
+
+    return AgentHealthResponse(
+        agent_id=agent_id,
+        healthy=all_healthy,
+        checks=checks,
+    )

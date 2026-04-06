@@ -21,6 +21,7 @@ const Sessions = lazy(() => import('@/pages/Sessions'));
 const SessionDetail = lazy(() => import('@/pages/SessionDetail'));
 const AutomationEditor = lazy(() => import('@/pages/AutomationEditor'));
 const AutomationArchitect = lazy(() => import('@/pages/AutomationArchitect'));
+const AgentConfig = lazy(() => import('@/pages/AgentConfig'));
 
 // ── Review: pages with real UI, kept for evaluation ──
 const Meeting = lazy(() => import('@/pages/Meeting'));
@@ -45,6 +46,7 @@ export default function App() {
         <Route path="/system" element={<System />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/agents" element={<Agents />} />
+        <Route path="/agents/:id" element={<AgentConfig />} />
         <Route path="/skills" element={<Skills />} />
         <Route path="/org" element={<Org />} />
 

@@ -1,12 +1,14 @@
 import { useState, useMemo, useCallback } from 'react';
+import { useRegisterPageActions, type PageAction } from '@/hooks/usePageActions';
 import {
   X, Shield, Wrench, Zap, Brain, Users, Plus, Search,
   Crown, Code, Megaphone, DollarSign, Briefcase,
   Sparkles, BookOpen, Lock, Globe, ExternalLink,
   Server, Palette, Scale, Target, PenTool, Database,
   Bug, GitBranch, Mail, Share2, ArrowUpRight, ChevronRight,
-  Loader2,
+  Loader2, Settings,
 } from 'lucide-react';
+import TransitionLink from '@/components/primitives/TransitionLink';
 import type { ReactNode } from 'react';
 import { useAgents, useCatalog, useActivateAgent, useInstallCommunity } from '@/hooks/useAgents';
 import type { Agent } from '@/hooks/useAgents';
@@ -615,7 +617,17 @@ function AgentDetail({ agent, allAgents, onClose }: { agent: Agent; allAgents: A
             </div>
           </div>
 
-          <p className="text-[13px] text-text-secondary leading-[1.65] mb-8">{agent.description}</p>
+          <p className="text-[13px] text-text-secondary leading-[1.65] mb-5">{agent.description}</p>
+
+          <div className="mb-8">
+            <TransitionLink
+              href={`/agents/${agent.id}`}
+              className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-accent/10 hover:bg-accent/20 text-[12px] font-[510] text-accent transition-colors cursor-pointer"
+              onClick={() => onClose()}
+            >
+              <Settings className="w-3.5 h-3.5" /> Configure
+            </TransitionLink>
+          </div>
 
           <div className="flex items-center gap-4 mb-8 text-[12px] text-text-quaternary">
             <span className="font-mono">{agent.model}</span>
@@ -751,6 +763,31 @@ export default function AgentsPage() {
 
   const catalogCount = catalogAgents.filter(a => !installedIds.has(a.id)).length;
   const communityCount = COMMUNITY_AGENTS.filter(a => !installedIds.has(a.id)).length;
+
+  const pageActions: PageAction[] = useMemo(() => [
+    {
+      id: 'agents.switch_view',
+      label: 'Switch Agents view',
+      category: 'navigate',
+      params: [{ name: 'view', type: 'enum' as const, required: true, description: 'View to show', options: ['roster', 'recruit', 'skills'] }],
+      execute: ({ view: v }) => setView(v as View),
+    },
+    {
+      id: 'agents.search',
+      label: 'Search agents',
+      category: 'search',
+      params: [{ name: 'query', type: 'string' as const, required: true, description: 'Search query' }],
+      execute: ({ query }) => { setView('recruit'); setSearchQuery(query as string); },
+    },
+    {
+      id: 'agents.filter_department',
+      label: 'Filter by department',
+      category: 'filter',
+      params: [{ name: 'dept', type: 'enum' as const, required: true, description: 'Department', options: ['all', 'leadership', 'engineering', 'operations', 'marketing', 'finance', 'business'] }],
+      execute: ({ dept }) => setDeptFilter(dept as Department | 'all'),
+    },
+  ], [])
+  useRegisterPageActions(pageActions)
 
   const handleHire = useCallback(async (agent: RecruitAgent) => {
     if (!isRealAgent(agent) && 'sourceRepo' in agent) {
