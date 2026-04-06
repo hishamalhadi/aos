@@ -5,7 +5,7 @@ import {
   Activity, Settings, Mic, MessageSquare, Zap,
   Menu, Search, Sun, Moon, X,
   BookOpen, CalendarDays, ScrollText,
-  ShieldCheck, Network,
+  ShieldCheck, Network, Sparkles,
   type LucideIcon,
 } from 'lucide-react';
 import { useUIStore } from '@/store/ui';
@@ -55,6 +55,7 @@ const NAV_GROUPS: NavGroup[] = [
       { label: 'System', href: '/system', icon: Activity },
       { label: 'Automations', href: '/automations', icon: Zap },
       { label: 'Agents', href: '/agents', icon: Bot },
+      { label: 'Skills', href: '/skills', icon: Sparkles },
       { label: 'Org Chart', href: '/org', icon: Network },
       { label: 'Settings', href: '/settings', icon: Settings },
     ],

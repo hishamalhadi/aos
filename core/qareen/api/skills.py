@@ -140,12 +140,23 @@ def _parse_skill_md(skill_dir: Path) -> dict[str, Any] | None:
     triggers = _extract_triggers(description)
     category = _CATEGORY_HINTS.get(skill_id, "domain")
 
+    # Allowed tools
+    raw_tools = frontmatter.get("allowed-tools", frontmatter.get("allowed_tools", ""))
+    if isinstance(raw_tools, str):
+        allowed_tools = [t.strip() for t in raw_tools.split(",") if t.strip()]
+    elif isinstance(raw_tools, list):
+        allowed_tools = raw_tools
+    else:
+        allowed_tools = []
+
     return {
         "id": skill_id,
         "name": name,
         "description": description,
         "triggers": triggers,
         "category": category,
+        "allowed_tools": allowed_tools,
+        "body": body,
         "is_active": True,
         "source_path": str(skill_md),
     }
@@ -168,7 +179,7 @@ def _discover_skills() -> list[dict[str, Any]]:
 
 @router.get("", response_model=SkillListResponse)
 async def list_skills() -> SkillListResponse:
-    """List all installed skills."""
+    """List all installed skills (body excluded for performance)."""
     skills_data = _discover_skills()
     skills = [
         SkillResponse(
@@ -177,6 +188,7 @@ async def list_skills() -> SkillListResponse:
             description=s["description"],
             triggers=s["triggers"],
             category=s.get("category", "domain"),
+            allowed_tools=s.get("allowed_tools", []),
             is_active=s["is_active"],
             source_path=s["source_path"],
         )
@@ -187,4 +199,30 @@ async def list_skills() -> SkillListResponse:
         skills=skills,
         total=len(skills),
         active_count=sum(1 for s in skills if s.is_active),
+    )
+
+
+@router.get("/{skill_id}", response_model=SkillResponse)
+async def get_skill(skill_id: str) -> SkillResponse | JSONResponse:
+    """Get a single skill with full body content."""
+    from fastapi.responses import JSONResponse
+
+    skill_dir = SKILLS_DIR / skill_id
+    if not skill_dir.is_dir():
+        return JSONResponse({"error": f"Skill not found: {skill_id}"}, status_code=404)
+
+    parsed = _parse_skill_md(skill_dir)
+    if not parsed:
+        return JSONResponse({"error": f"Could not parse skill: {skill_id}"}, status_code=500)
+
+    return SkillResponse(
+        id=parsed["id"],
+        name=parsed["name"],
+        description=parsed["description"],
+        triggers=parsed["triggers"],
+        category=parsed.get("category", "domain"),
+        allowed_tools=parsed.get("allowed_tools", []),
+        body=parsed.get("body", ""),
+        is_active=parsed["is_active"],
+        source_path=parsed["source_path"],
     )
