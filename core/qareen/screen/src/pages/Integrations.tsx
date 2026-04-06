@@ -664,23 +664,22 @@ export default function IntegrationsPage() {
 
   return (
     <div className="h-full flex flex-col bg-bg">
-      {/* Tab pills */}
-      <div className="shrink-0 flex justify-center pt-3 pb-2 pointer-events-none">
-        <div className="flex items-center gap-1 h-8 px-1 rounded-full border pointer-events-auto" style={GLASS}>
-          {TABS.map(t => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 h-6 rounded-full text-[11px] font-[510] cursor-pointer transition-all duration-150 ${
-                tab === t.id ? 'bg-[rgba(255,245,235,0.10)] text-text' : 'text-text-tertiary hover:text-text-secondary'
-              }`}>
-              {t.icon} {t.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       {/* Content */}
       <div className="flex-1 overflow-y-auto px-6 pb-8">
-        <div className="max-w-[680px] mx-auto pt-2">
+        <div className="max-w-[680px] mx-auto">
+          {/* Tab pills — centered below nav chrome */}
+          <div className="flex justify-center pt-12 pb-4">
+            <div className="inline-flex items-center gap-0.5 h-8 px-1.5 rounded-full bg-bg-tertiary border border-border">
+              {TABS.map(t => (
+                <button key={t.id} onClick={() => setTab(t.id)}
+                  className={`px-3 h-6 rounded-full text-[11px] font-[510] cursor-pointer transition-all duration-150 whitespace-nowrap ${
+                    tab === t.id ? 'bg-accent/15 text-text' : 'text-text-tertiary hover:text-text-secondary'
+                  }`}>
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {isLoading && (
             <div className="flex items-center justify-center py-20">

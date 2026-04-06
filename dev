@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# AOS Dev Mode — starts backend + frontend from the dev workspace
+#
+# Usage:
+#   ./dev           Start both backend (4097) and frontend (5173)
+#   ./dev backend   Start only the backend
+#   ./dev frontend  Start only the frontend
+#
+# The runtime Qareen on :4096 stays untouched.
+# Vite proxies to :4097 (dev backend) when VITE_API_PORT is set.
+
+set -euo pipefail
+
+DEV_PORT=4098
+VITE_PORT=5173
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+CORE="$ROOT/core"
+SCREEN="$CORE/qareen/screen"
+VENV="$HOME/.aos/services/qareen/.venv/bin/python"
+
+# Use the same venv as the runtime service
+if [ ! -f "$VENV" ]; then
+  echo "Qareen venv not found at $VENV"
+  echo "Run: python3 -m venv ~/.aos/services/qareen/.venv && pip install -r core/qareen/requirements.txt"
+  exit 1
+fi
+
+cleanup() {
+  echo ""
+  echo "Shutting down dev servers..."
+  kill $BACKEND_PID $FRONTEND_PID 2>/dev/null || true
+  wait 2>/dev/null
+}
+
+start_backend() {
+  echo "Starting dev backend on :$DEV_PORT (from $CORE)"
+  cd "$CORE"
+  PYTHONPATH="$CORE" "$VENV" -m uvicorn qareen.main:app \
+    --host 0.0.0.0 \
+    --port "$DEV_PORT" \
+    --reload \
+    --reload-dir "$CORE/qareen" \
+    --reload-dir "$CORE/engine" \
+    --reload-dir "$CORE/infra" \
+    --log-level info &
+  BACKEND_PID=$!
+}
+
+start_frontend() {
+  echo "Starting dev frontend on :$VITE_PORT (proxying to :$DEV_PORT)"
+  cd "$SCREEN"
+  VITE_API_PORT=$DEV_PORT npx vite --port "$VITE_PORT" &
+  FRONTEND_PID=$!
+}
+
+case "${1:-all}" in
+  backend)
+    trap 'kill $BACKEND_PID 2>/dev/null' EXIT INT TERM
+    start_backend
+    wait
+    ;;
+  frontend)
+    trap 'kill $FRONTEND_PID 2>/dev/null' EXIT INT TERM
+    start_frontend
+    wait
+    ;;
+  all|*)
+    trap cleanup EXIT INT TERM
+    start_backend
+    sleep 1
+    start_frontend
+    echo ""
+    echo "Dev mode running:"
+    echo "  Backend:  http://localhost:$DEV_PORT"
+    echo "  Frontend: http://localhost:$VITE_PORT"
+    echo ""
+    wait
+    ;;
+esac

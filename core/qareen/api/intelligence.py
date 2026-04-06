@@ -162,7 +162,7 @@ async def list_feed(
 # ---------------------------------------------------------------------------
 
 @router.get("/items/{item_id}")
-async def get_item(item_id: str) -> dict[str, Any] | JSONResponse:
+async def get_item(item_id: str) -> JSONResponse:
     """Get a single intelligence item with full content."""
     if not DB_PATH.exists():
         return JSONResponse({"error": "Item not found"}, status_code=404)
@@ -193,7 +193,7 @@ async def get_item(item_id: str) -> dict[str, Any] | JSONResponse:
 
 
 @router.post("/items/{item_id}/save")
-async def save_item(item_id: str) -> dict[str, Any] | JSONResponse:
+async def save_item(item_id: str) -> JSONResponse:
     """Promote an intelligence item to a vault capture.
 
     Generates a markdown file in ~/vault/knowledge/captures/ with proper
@@ -314,7 +314,7 @@ async def save_item(item_id: str) -> dict[str, Any] | JSONResponse:
 
 
 @router.post("/items/{item_id}/dismiss")
-async def dismiss_item(item_id: str) -> dict[str, Any] | JSONResponse:
+async def dismiss_item(item_id: str) -> JSONResponse:
     """Mark an intelligence item as dismissed."""
     if not DB_PATH.exists():
         return JSONResponse({"error": "Item not found"}, status_code=404)
@@ -345,7 +345,7 @@ async def dismiss_item(item_id: str) -> dict[str, Any] | JSONResponse:
 
 
 @router.post("/items/{item_id}/read")
-async def mark_read(item_id: str) -> dict[str, Any] | JSONResponse:
+async def mark_read(item_id: str) -> JSONResponse:
     """Mark an intelligence item as read."""
     if not DB_PATH.exists():
         return JSONResponse({"error": "Item not found"}, status_code=404)
@@ -400,7 +400,7 @@ async def list_sources() -> dict[str, Any]:
 
 
 @router.post("/sources")
-async def create_source(request: Request) -> dict[str, Any] | JSONResponse:
+async def create_source(request: Request) -> JSONResponse:
     """Add a new intelligence source."""
     body = await request.json()
 
@@ -475,7 +475,7 @@ async def create_source(request: Request) -> dict[str, Any] | JSONResponse:
 @router.put("/sources/{source_id}")
 async def update_source(
     source_id: str, request: Request,
-) -> dict[str, Any] | JSONResponse:
+) -> JSONResponse:
     """Update an existing intelligence source."""
     if not DB_PATH.exists():
         return JSONResponse({"error": "Source not found"}, status_code=404)
@@ -532,7 +532,7 @@ async def update_source(
 
 
 @router.delete("/sources/{source_id}")
-async def delete_source(source_id: str) -> dict[str, Any] | JSONResponse:
+async def delete_source(source_id: str) -> JSONResponse:
     """Remove an intelligence source."""
     if not DB_PATH.exists():
         return JSONResponse({"error": "Source not found"}, status_code=404)
