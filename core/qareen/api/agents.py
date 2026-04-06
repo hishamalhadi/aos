@@ -475,20 +475,31 @@ async def list_skill_options() -> AgentOptionsResponse:
 
 @router.get("/options/mcp-servers", response_model=AgentOptionsResponse)
 async def list_mcp_options() -> AgentOptionsResponse:
-    """List configured MCP servers from ~/.claude/mcp.json."""
+    """List all known MCP servers — configured + referenced by agents."""
     import json
 
-    mcp_json = Path.home() / ".claude" / "mcp.json"
-    servers: list[str] = []
+    servers: set[str] = set()
 
+    # 1. Configured in ~/.claude/mcp.json (actually installed)
+    mcp_json = Path.home() / ".claude" / "mcp.json"
     if mcp_json.is_file():
         try:
             mcp_data = json.loads(mcp_json.read_text())
-            servers = sorted(mcp_data.get("mcpServers", {}).keys())
+            servers.update(mcp_data.get("mcpServers", {}).keys())
         except Exception:
             pass
 
-    return AgentOptionsResponse(items=servers, total=len(servers))
+    # 2. Referenced by any agent (from frontmatter mcpServers field)
+    for directory in [INSTALLED_DIR, SYSTEM_DIR, CATALOG_DIR]:
+        if not directory.is_dir():
+            continue
+        for entry in directory.iterdir():
+            if entry.suffix == ".md" and entry.is_file() and not entry.stem.startswith("-"):
+                parsed = _parse_agent_md(entry)
+                if parsed:
+                    servers.update(parsed.get("mcp_servers", []))
+
+    return AgentOptionsResponse(items=sorted(servers), total=len(servers))
 
 
 @router.get("/options/rules", response_model=AgentOptionsResponse)
