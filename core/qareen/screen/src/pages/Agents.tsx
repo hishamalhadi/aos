@@ -8,7 +8,7 @@ import {
   Bug, GitBranch, Mail, Share2, ArrowUpRight, ChevronRight,
   Loader2, Settings,
 } from 'lucide-react';
-import TransitionLink from '@/components/primitives/TransitionLink';
+// useNavigate not needed — Configure link uses <a> for clean page transition
 import type { ReactNode } from 'react';
 import { useAgents, useCatalog, useActivateAgent, useInstallCommunity } from '@/hooks/useAgents';
 import type { Agent } from '@/hooks/useAgents';
@@ -620,13 +620,12 @@ function AgentDetail({ agent, allAgents, onClose }: { agent: Agent; allAgents: A
           <p className="text-[13px] text-text-secondary leading-[1.65] mb-5">{agent.description}</p>
 
           <div className="mb-8">
-            <TransitionLink
+            <a
               href={`/agents/${agent.id}`}
               className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-accent/10 hover:bg-accent/20 text-[12px] font-[510] text-accent transition-colors cursor-pointer"
-              onClick={() => onClose()}
             >
               <Settings className="w-3.5 h-3.5" /> Configure
-            </TransitionLink>
+            </a>
           </div>
 
           <div className="flex items-center gap-4 mb-8 text-[12px] text-text-quaternary">
