@@ -416,6 +416,8 @@ class SkillResponse(BaseModel):
     description: str = Field("", description="What this skill does")
     triggers: list[str] = Field(default_factory=list, description="Trigger phrases")
     category: str = Field("domain", description="core, domain, workflow, or integration")
+    allowed_tools: list[str] = Field(default_factory=list, description="Tools this skill can use")
+    body: str | None = Field(None, description="Full SKILL.md body (detail endpoint only)")
     is_active: bool = Field(True, description="Whether skill is enabled")
     source_path: str | None = Field(None, description="Path to SKILL.md")
 
