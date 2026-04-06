@@ -139,27 +139,35 @@ function ConnectorCard({ connector }: { connector: Connector }) {
 // Credential row
 // ============================================================
 
-function CredentialRow({ credential }: { credential: Credential }) {
+function CredentialRow({ credential }: { credential: Credential & { category?: string } }) {
   const providers = credential.used_by.providers ?? [];
   const connectors = credential.used_by.connectors ?? [];
+  const usages = [...providers, ...connectors];
+  const catColors: Record<string, string> = {
+    api: 'text-accent/60 bg-accent/8',
+    oauth: 'text-blue/60 bg-blue/8',
+    messaging: 'text-teal/60 bg-teal/8',
+    account: 'text-purple/60 bg-purple/8',
+    other: 'text-text-quaternary bg-bg-tertiary',
+  };
+  const cat = (credential as any).category ?? 'other';
   return (
-    <div className="flex items-center gap-4 px-4 py-3 rounded-lg hover:bg-[rgba(255,245,235,0.03)] transition-colors" style={{ transitionDuration: '80ms' }}>
-      <div className="w-8 h-8 rounded-lg bg-bg-tertiary flex items-center justify-center shrink-0">
-        <KeyRound className="w-3.5 h-3.5 text-text-quaternary" />
+    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[rgba(255,245,235,0.03)] transition-colors" style={{ transitionDuration: '80ms' }}>
+      <div className="w-7 h-7 rounded-md bg-bg-tertiary flex items-center justify-center shrink-0">
+        <KeyRound className="w-3 h-3 text-text-quaternary" />
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-[13px] font-[560] font-mono text-text">{credential.name}</span>
+          <span className="text-[12px] font-[560] font-mono text-text">{credential.name}</span>
+          <span className={`text-[8px] font-[510] px-1 py-px rounded ${catColors[cat] ?? catColors.other}`}>{cat}</span>
           {credential.present
-            ? <span className="flex items-center gap-1 text-[10px] text-green/70"><Check className="w-2.5 h-2.5" /> In keychain</span>
-            : <span className="flex items-center gap-1 text-[10px] text-red/70"><AlertCircle className="w-2.5 h-2.5" /> Missing</span>
+            ? <Check className="w-2.5 h-2.5 text-green/60" />
+            : <AlertCircle className="w-2.5 h-2.5 text-red/50" />
           }
         </div>
-        <p className="text-[11px] text-text-quaternary">{credential.description}</p>
-      </div>
-      <div className="flex items-center gap-2 shrink-0 text-[10px] text-text-quaternary">
-        {providers.length > 0 && <span>{providers.join(', ')}</span>}
-        {connectors.length > 0 && <span>{connectors.join(', ')}</span>}
+        {usages.length > 0 && (
+          <span className="text-[10px] text-text-quaternary/60">{usages.join(', ')}</span>
+        )}
       </div>
     </div>
   );
