@@ -306,63 +306,22 @@ function ContextFilter({
 /* ── Main content ── */
 
 function ConnectionsContent() {
-  const { data, isLoading, isError } = useConnections();
-  const [filter, setFilter] = useState('all');
-
-  if (isLoading) {
-    return (
-      <SettingCard icon={Link2} title="Connections">
-        <LoadingRows count={4} />
-      </SettingCard>
-    );
-  }
-
-  if (isError) {
-    return (
-      <SettingCard icon={Link2} title="Connections">
-        <div className="py-3">
-          <span className="text-[12px] text-text-quaternary">
-            Couldn't load connections. The dashboard may need a restart.
-          </span>
-        </div>
-      </SettingCard>
-    );
-  }
-
-  const allContexts = data?.contexts ?? [];
-
-  if (allContexts.length === 0) {
-    return (
-      <SettingCard icon={Link2} title="Connections">
-        <div className="py-3">
-          <span className="text-[13px] text-text-quaternary">
-            No accounts configured. Run onboarding to connect your services.
-          </span>
-        </div>
-      </SettingCard>
-    );
-  }
-
-  const filtered = filter === 'all'
-    ? null
-    : allContexts.find((c) => c.id === filter);
-
-  const visibleAccounts = filter === 'all'
-    ? allContexts.flatMap((ctx) => ctx.accounts)
-    : (filtered?.accounts ?? []);
-
-  const groups = groupByProvider(visibleAccounts);
-
   return (
     <SettingCard icon={Link2} title="Connections">
-      <ContextFilter contexts={allContexts} active={filter} onChange={setFilter} />
-      {filtered?.description && filter !== 'all' && (
-        <p className="text-[11px] text-text-quaternary mb-1">{filtered.description}</p>
-      )}
-      <div className="divide-y divide-border">
-        {groups.map((g) => (
-          <ProviderGroup key={g.provider} provider={g.provider} accounts={g.accounts} />
-        ))}
+      <div className="py-2">
+        <span className="text-[13px] text-text-secondary block mb-1">
+          Providers, connectors, and credentials
+        </span>
+        <span className="text-[11px] text-text-quaternary block mb-3">
+          Manage AI providers, MCP servers, API keys, and connected accounts.
+        </span>
+        <a
+          href="/integrations"
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md bg-accent/10 hover:bg-accent/20 text-[12px] font-[510] text-accent transition-colors cursor-pointer"
+          style={{ transitionDuration: '80ms' }}
+        >
+          Open Integrations <ChevronRight className="w-3 h-3" />
+        </a>
       </div>
     </SettingCard>
   );
