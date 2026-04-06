@@ -468,13 +468,19 @@ CREATE TABLE IF NOT EXISTS skill_proposals (
 CREATE TABLE IF NOT EXISTS intelligence_sources (
     id              TEXT PRIMARY KEY,
     name            TEXT NOT NULL,
-    layer           INTEGER NOT NULL,           -- 0-5 (internal through global)
-    tier            TEXT NOT NULL,              -- api, firecrawl, social, restricted
+    platform        TEXT,                       -- twitter, youtube, github, hn, blog, arxiv
+    layer           INTEGER NOT NULL DEFAULT 5, -- 0-5 (internal through global)
+    tier            TEXT NOT NULL DEFAULT 'social', -- api, firecrawl, social, restricted
     url             TEXT,                       -- base URL or API endpoint
-    update_cadence  TEXT NOT NULL,              -- hourly, daily, weekly, on_demand
+    route           TEXT,                       -- RSSHub route path (e.g. /twitter/user/karpathy)
+    route_url       TEXT,                       -- direct RSS URL (for sources with native RSS)
+    priority        TEXT DEFAULT 'normal',      -- high, normal, low
+    keywords        TEXT,                       -- JSON array of triage keywords
+    update_cadence  TEXT NOT NULL DEFAULT 'hourly', -- hourly, daily, weekly, on_demand
     last_checked    TEXT,
     last_success    TEXT,
     consecutive_failures INTEGER DEFAULT 0,
+    items_total     INTEGER DEFAULT 0,          -- total items ever fetched
     config          TEXT,                       -- JSON: auth, rate limits, selectors
     is_active       INTEGER DEFAULT 1,
     category        TEXT,                       -- weather, market, regulation, competitor, news, social
@@ -485,15 +491,23 @@ CREATE TABLE IF NOT EXISTS intelligence_briefs (
     id              TEXT PRIMARY KEY,
     source_id       TEXT NOT NULL REFERENCES intelligence_sources(id),
     created_at      TEXT NOT NULL,
-    layer           INTEGER NOT NULL,
-    category        TEXT NOT NULL,
+    layer           INTEGER NOT NULL DEFAULT 5,
+    category        TEXT NOT NULL DEFAULT 'news',
+    platform        TEXT,                       -- twitter, youtube, github, hn, blog, arxiv
     title           TEXT NOT NULL,
-    summary         TEXT NOT NULL,              -- LLM-synthesized analysis
+    summary         TEXT,                       -- auto-generated 2-3 sentence summary
+    content         TEXT,                       -- full extracted markdown
+    url             TEXT UNIQUE,                -- source URL (dedup key)
+    author          TEXT,
     raw_data        TEXT,                       -- JSON: the raw data that was analyzed
     key_findings    TEXT,                       -- JSON array
     relevance_score REAL DEFAULT 0,             -- how relevant to operator's context
+    relevance_tags  TEXT,                       -- JSON array of matched keywords
     expires_at      TEXT,                       -- when this brief is stale
+    published_at    TEXT,                       -- original publication time
     project_id      TEXT,
+    status          TEXT DEFAULT 'unread',      -- unread, read, saved, dismissed
+    vault_path      TEXT,                       -- set when saved to vault
     surfaced        INTEGER DEFAULT 0,          -- 0/1: has this been shown to operator?
     surfaced_at     TEXT,
     operator_action TEXT                        -- acknowledged, acted_on, dismissed, NULL
@@ -600,6 +614,11 @@ CREATE INDEX IF NOT EXISTS idx_briefs_created ON intelligence_briefs(created_at)
 CREATE INDEX IF NOT EXISTS idx_briefs_layer ON intelligence_briefs(layer, category);
 CREATE INDEX IF NOT EXISTS idx_briefs_project ON intelligence_briefs(project_id);
 CREATE INDEX IF NOT EXISTS idx_briefs_unsurfaced ON intelligence_briefs(surfaced) WHERE surfaced = 0;
+CREATE INDEX IF NOT EXISTS idx_briefs_status ON intelligence_briefs(status);
+CREATE INDEX IF NOT EXISTS idx_briefs_url ON intelligence_briefs(url);
+CREATE INDEX IF NOT EXISTS idx_briefs_platform ON intelligence_briefs(platform);
+CREATE INDEX IF NOT EXISTS idx_briefs_published ON intelligence_briefs(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sources_platform ON intelligence_sources(platform);
 
 -- ============================================================
 -- COMPANION SESSIONS (intelligence engine state)
