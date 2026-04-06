@@ -26,7 +26,16 @@ export interface Connector {
   credential: string | null;
   tags: string[];
   is_configured: boolean;
-  status: string;
+  status: string;         // connected | partial | available | not-configured | broken | not-running
+  status_detail?: string;
+  health?: Array<{ name: string; status: string; detail: string; description?: string }>;
+  capabilities?: Array<{ id: string; label: string; description: string }>;
+  icon?: string;
+  color?: string;
+  tier?: number;
+  category?: string;
+  automation_ideas?: Array<Record<string, unknown>>;
+  accounts?: string[];
 }
 
 export interface Credential {
@@ -118,6 +127,52 @@ export function useSyncConnectors() {
     mutationFn: async () => {
       const res = await fetch(`${API}/sync`, { method: 'POST' });
       if (!res.ok) throw new Error(`Sync failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
+  });
+}
+
+export function useAddProvider() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (provider: Record<string, unknown>) => {
+      const res = await fetch(`${API}/providers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(provider),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `Failed: ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),
+  });
+}
+
+export function useVerifyProvider() {
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const res = await fetch(`${API}/providers/${id}/verify`, {
+        method: 'POST',
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error ?? `Verification failed: ${res.status}`);
+      }
+      return res.json();
+    },
+  });
+}
+
+export function useRefreshHealth() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const res = await fetch(`${API}/health/refresh`, { method: 'POST' });
+      if (!res.ok) throw new Error(`Health refresh failed: ${res.status}`);
       return res.json();
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['integrations'] }),

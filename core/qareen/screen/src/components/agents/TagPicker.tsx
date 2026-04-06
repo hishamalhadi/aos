@@ -6,6 +6,7 @@ interface TagPickerProps {
   available: string[];
   onChange: (v: string[]) => void;
   disabled?: boolean;
+  labels?: Record<string, string>;
 }
 
 export default function TagPicker({
@@ -13,6 +14,7 @@ export default function TagPicker({
   available,
   onChange,
   disabled = false,
+  labels,
 }: TagPickerProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState('');
@@ -22,7 +24,8 @@ export default function TagPicker({
   const unselected = available.filter(
     (item) =>
       !selected.includes(item) &&
-      item.toLowerCase().includes(search.toLowerCase()),
+      (item.toLowerCase().includes(search.toLowerCase()) ||
+        labels?.[item]?.toLowerCase().includes(search.toLowerCase())),
   );
 
   const handleRemove = useCallback(
@@ -78,7 +81,7 @@ export default function TagPicker({
               key={item}
               className="inline-flex items-center gap-1 h-6 px-2 rounded text-[11px] font-mono text-text-tertiary bg-[rgba(255,245,235,0.04)]"
             >
-              {item}
+              {labels?.[item] ?? item}
               {!disabled && (
                 <button
                   type="button"
@@ -129,10 +132,17 @@ export default function TagPicker({
                   key={item}
                   type="button"
                   onClick={() => handleAdd(item)}
-                  className="w-full text-left px-3 py-1.5 rounded text-[11px] font-mono text-text-secondary hover:bg-hover cursor-pointer transition-colors"
+                  className="w-full text-left px-3 py-1.5 rounded text-[11px] text-text-secondary hover:bg-hover cursor-pointer transition-colors"
                   style={{ transitionDuration: '80ms' }}
                 >
-                  {item}
+                  {labels?.[item] ? (
+                    <span className="flex items-center gap-2">
+                      <span className="font-[460]">{labels[item]}</span>
+                      <span className="font-mono text-text-quaternary text-[10px]">{item}</span>
+                    </span>
+                  ) : (
+                    <span className="font-mono">{item}</span>
+                  )}
                 </button>
               ))
             )}
