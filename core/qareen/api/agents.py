@@ -721,54 +721,60 @@ async def dispatch_agent(request: Request) -> JSONResponse:
         if end != -1:
             agent_content = agent_content[end + 3:].lstrip("\n")
 
-    model = agent_data.get("model", "sonnet")
+    model = body.get("model", agent_data.get("model", "sonnet"))
 
-    # Build prompt
-    prompt_parts = [f"<system>\n{agent_content}\n</system>\n"]
+    # Build user prompt
+    user_prompt = task
     if context:
-        prompt_parts.append(f"Context: {context}\n")
-    prompt_parts.append(f"Task: {task}")
-    prompt = "\n".join(prompt_parts)
+        user_prompt = f"Context: {context}\n\nTask: {task}"
 
-    start = time.monotonic()
+    # Route through execution layer
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "claude", "--print", "--model", model,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(prompt.encode()), timeout=120
-        )
-        duration_ms = int((time.monotonic() - start) * 1000)
+        from core.engine.execution.router import ExecutionRouter
 
-        if proc.returncode != 0:
-            return JSONResponse({
-                "result": "",
-                "status": "error",
-                "error": stderr.decode()[:500],
-                "duration_ms": duration_ms,
-            }, status_code=500)
+        router = ExecutionRouter()
+        exec_result = await router.execute(
+            agent_id=agent_id,
+            prompt=user_prompt,
+            model=model,
+            system_prompt=agent_content,
+        )
 
-        result = stdout.decode().strip()
+        status_code = 200 if exec_result.status == "ok" else (504 if exec_result.status == "timeout" else 500)
         return JSONResponse({
-            "result": result,
-            "status": "ok",
+            "result": exec_result.text,
+            "status": exec_result.status,
             "agent_id": agent_id,
             "agent_name": agent_data.get("name", agent_id),
-            "duration_ms": duration_ms,
-        })
+            "provider": exec_result.provider,
+            "model": exec_result.model,
+            "duration_ms": exec_result.duration_ms,
+            "tokens_in": exec_result.tokens_in,
+            "tokens_out": exec_result.tokens_out,
+            "error": exec_result.error,
+        }, status_code=status_code)
 
-    except FileNotFoundError:
-        return JSONResponse({"error": "claude CLI not found"}, status_code=503)
-    except asyncio.TimeoutError:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        return JSONResponse({
-            "result": "",
-            "status": "timeout",
-            "duration_ms": duration_ms,
-        }, status_code=504)
+    except ImportError:
+        # Fallback: direct claude CLI if execution router not available
+        start = time.monotonic()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "claude", "--print", "--model", model,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(user_prompt.encode()), timeout=120,
+            )
+            duration_ms = int((time.monotonic() - start) * 1000)
+            if proc.returncode != 0:
+                return JSONResponse({"result": "", "status": "error", "error": stderr.decode()[:500], "duration_ms": duration_ms}, status_code=500)
+            return JSONResponse({"result": stdout.decode().strip(), "status": "ok", "agent_id": agent_id, "agent_name": agent_data.get("name", agent_id), "duration_ms": duration_ms})
+        except FileNotFoundError:
+            return JSONResponse({"error": "claude CLI not found"}, status_code=503)
+        except asyncio.TimeoutError:
+            return JSONResponse({"result": "", "status": "timeout", "duration_ms": int((time.monotonic() - start) * 1000)}, status_code=504)
 
 
 # ---------------------------------------------------------------------------
