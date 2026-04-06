@@ -225,9 +225,11 @@ function SuggestionCard({
 function SuggestionGrid({
   suggestions,
   onSetUp,
+  connectorStatuses,
 }: {
   suggestions: AutomationSuggestion[];
   onSetUp: (description: string) => void;
+  connectorStatuses: Record<string, string>;
 }) {
   if (suggestions.length === 0) return null;
 
@@ -238,7 +240,7 @@ function SuggestionGrid({
       </span>
       <div className="grid grid-cols-2 gap-3">
         {suggestions.slice(0, 6).map((s) => (
-          <SuggestionCard key={s.id} suggestion={s} onSetUp={onSetUp} />
+          <SuggestionCard key={s.id} suggestion={s} onSetUp={onSetUp} connectorStatuses={connectorStatuses} />
         ))}
       </div>
       {suggestions.length > 6 && (
@@ -507,7 +509,7 @@ function N8nAutomationCard({
       </div>
 
       {/* Description */}
-      <p className="text-[12px] text-text-quaternary leading-relaxed">
+      <p className="text-[12px] text-text-quaternary leading-relaxed line-clamp-2">
         {automation.description || automation.user_prompt}
       </p>
 
@@ -1097,15 +1099,20 @@ function FilterBar({
 function FeaturedCard({
   suggestion,
   onSetUp,
+  connectorStatuses,
 }: {
   suggestion: AutomationSuggestion;
   onSetUp: () => void;
+  connectorStatuses: Record<string, string>;
 }) {
   const ConnectorIcon = CONNECTOR_ICONS[suggestion.source_icon] || Zap;
+  const allConnected = suggestion.required_connectors.every(
+    id => connectorStatuses[id] === 'connected'
+  );
 
   return (
     <div
-      className="rounded-[10px] border border-border p-5 transition-all duration-150 hover:border-border-secondary cursor-pointer"
+      className="rounded-[10px] border border-border p-5 group transition-all duration-150 hover:border-border-secondary cursor-pointer"
       style={{ background: 'var(--glass-bg)', backdropFilter: 'blur(12px)' }}
       onClick={onSetUp}
     >
@@ -1122,11 +1129,21 @@ function FeaturedCard({
             {suggestion.description}
           </p>
           <div className="flex items-center gap-2 mt-2.5">
-            <span className="text-[10px] text-text-quaternary">
-              {suggestion.source_connector_name}
-              {suggestion.required_connectors.length > 1 && ` + ${suggestion.required_connectors.length - 1} more`}
+            <div className="flex items-center gap-1.5">
+              {suggestion.required_connectors.map(id => {
+                const status = connectorStatuses[id];
+                const color = status === 'connected' ? '#30D158' : status === 'partial' ? '#FFD60A' : '#6B6560';
+                return (
+                  <div key={id} className="flex items-center gap-1">
+                    <div className="w-[5px] h-[5px] rounded-full" style={{ background: color }} />
+                    <span className="text-[9px] text-text-quaternary capitalize">{id.replace(/-/g, ' ')}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <span className={`text-[11px] font-[510] ml-auto ${allConnected ? 'text-green-400' : 'text-accent'}`}>
+              {allConnected ? 'Ready →' : 'Set up →'}
             </span>
-            <span className="text-[11px] font-[510] text-accent ml-auto">Set up →</span>
           </div>
         </div>
       </div>
@@ -1140,10 +1157,12 @@ function CategorySection({
   category,
   suggestions,
   onSetUp,
+  connectorStatuses,
 }: {
   category: string;
   suggestions: AutomationSuggestion[];
   onSetUp: (desc: string) => void;
+  connectorStatuses: Record<string, string>;
 }) {
   if (suggestions.length === 0) return null;
 
@@ -1154,7 +1173,7 @@ function CategorySection({
       </span>
       <div className="grid grid-cols-2 gap-3">
         {suggestions.map((s) => (
-          <SuggestionCard key={s.id} suggestion={s} onSetUp={onSetUp} />
+          <SuggestionCard key={s.id} suggestion={s} onSetUp={onSetUp} connectorStatuses={connectorStatuses} />
         ))}
       </div>
     </div>
@@ -1168,9 +1187,17 @@ export default function AutomationsPage() {
   const { data: n8nData, isLoading: n8nLoading } = useN8nAutomations();
   const { data: healthData } = useAutomationsHealth();
   const { data: suggestionsData, isLoading: suggestionsLoading } = useAutomationSuggestions();
+  const { connectors: connectorList } = useConnectors();
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [filter, setFilter] = useState<FilterTab>('all');
+
+  // Build connector status lookup: id → status
+  const connectorStatuses = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const c of connectorList) map[c.id] = c.status;
+    return map;
+  }, [connectorList]);
   const activate = useActivateAutomation();
   const deactivate = useDeactivateAutomation();
 
@@ -1294,6 +1321,7 @@ export default function AutomationsPage() {
                   key={s.id}
                   suggestion={s}
                   onSetUp={() => navigate('/automations/new')}
+                  connectorStatuses={connectorStatuses}
                 />
               ))}
             </div>
@@ -1307,6 +1335,7 @@ export default function AutomationsPage() {
             category={cat}
             suggestions={byCategory[cat] || []}
             onSetUp={() => navigate('/automations/new')}
+            connectorStatuses={connectorStatuses}
           />
         ))}
 
