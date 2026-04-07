@@ -11,6 +11,7 @@ import {
   type Provider, type Connector, type Credential,
 } from '@/hooks/useIntegrations';
 import { useExecutions, useExecutionSummary, type Execution } from '@/hooks/useExecutions';
+import { useModels, type Model } from '@/hooks/useModels';
 import KeyValueEditor from '@/components/agents/KeyValueEditor';
 
 // ============================================================
@@ -63,7 +64,137 @@ function ProviderIcon({ type }: { type: string }) {
 }
 
 // ============================================================
-// Provider card
+// Unified Providers tab (model registry)
+// ============================================================
+
+const PURPOSE_LABELS: Record<string, string> = {
+  execution: 'Execution',
+  stt: 'Speech-to-Text',
+  tts: 'Text-to-Speech',
+  embeddings: 'Embeddings',
+  reranking: 'Reranking',
+  expansion: 'Query Expansion',
+  codec: 'Audio Codec',
+  diarization: 'Speaker Diarization',
+};
+
+const PURPOSE_ORDER = ['execution', 'stt', 'tts', 'embeddings', 'reranking', 'expansion', 'codec', 'diarization'];
+
+const RUNTIME_LABELS: Record<string, string> = {
+  mlx: 'MLX',
+  gguf: 'GGUF',
+  pytorch: 'PyTorch',
+  api: 'API',
+  harness: 'Harness',
+  app: 'App',
+  local: 'Local',
+};
+
+function ModelCard({ model }: { model: Model }) {
+  const isRemote = model.source === 'api' || model.source === 'system';
+  const isRunning = model.running;
+  const statusColor =
+    model.status === 'preferred' ? 'text-accent bg-accent/10' :
+    model.status === 'active' ? 'text-green bg-green/10' :
+    model.status === 'disabled' ? 'text-text-quaternary bg-bg-tertiary' :
+    'text-text-quaternary bg-[rgba(255,245,235,0.04)]';
+
+  return (
+    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[rgba(255,245,235,0.03)] transition-colors" style={{ transitionDuration: '80ms' }}>
+      <div className="w-8 h-8 rounded-md bg-bg-tertiary flex items-center justify-center shrink-0">
+        {isRemote
+          ? <ProviderIcon type={model.runtime} />
+          : <span className="text-[11px] font-[600] text-text-quaternary">{RUNTIME_LABELS[model.runtime]?.charAt(0) ?? '?'}</span>
+        }
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-[13px] font-[560] text-text">{model.name}</span>
+          {model.status === 'preferred' && (
+            <span className={`text-[8px] font-[510] px-1.5 py-0.5 rounded ${statusColor}`}>preferred</span>
+          )}
+          {model.is_default && (
+            <span className="text-[8px] font-[510] text-accent/70 bg-accent/8 px-1.5 py-0.5 rounded">default</span>
+          )}
+          {isRunning && (
+            <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
+          )}
+        </div>
+        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-text-quaternary">
+          <span className="font-mono">{RUNTIME_LABELS[model.runtime] ?? model.runtime}</span>
+          {model.size_gb != null && model.size_gb > 0 && (
+            <span>{model.size_gb.toFixed(1)}GB</span>
+          )}
+          {model.credential && (
+            <span className="flex items-center gap-0.5">
+              <KeyRound className="w-2.5 h-2.5" />
+              {model.credential}
+            </span>
+          )}
+          {model.model_ids && model.model_ids.length > 0 && (
+            <span>{model.model_ids.length} models</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProvidersTab() {
+  const { data, isLoading } = useModels();
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center py-20">
+        <Loader2 className="w-5 h-5 text-text-quaternary animate-spin" />
+      </div>
+    );
+  }
+
+  const byPurpose = data?.by_purpose ?? {};
+  const total = data?.total ?? 0;
+  const diskGb = data?.total_disk_gb ?? 0;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <span className="text-[11px] text-text-quaternary">
+          {total} models · {diskGb}GB on disk
+        </span>
+      </div>
+
+      {PURPOSE_ORDER.map(purpose => {
+        const models = byPurpose[purpose];
+        if (!models || models.length === 0) return null;
+        const preferred = models.find((m: Model) => m.status === 'preferred');
+        return (
+          <div key={purpose} className="mb-5">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">
+                {PURPOSE_LABELS[purpose] ?? purpose}
+              </span>
+              <span className="text-[10px] text-text-quaternary/50">({models.length})</span>
+              {preferred && (
+                <span className="text-[9px] text-accent/60 ml-auto">{preferred.name}</span>
+              )}
+            </div>
+            <div className="rounded-lg border border-border/30">
+              {models.map((m: Model, i: number) => (
+                <div key={m.id}>
+                  {i > 0 && <div className="border-t border-border/20" />}
+                  <ModelCard model={m} />
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ============================================================
+// Legacy provider card (kept for reference)
 // ============================================================
 
 function ProviderCard({ provider }: { provider: Provider }) {
@@ -1053,25 +1184,8 @@ export default function IntegrationsPage() {
             <ServicesTab connectors={allConnectors} credentials={credentials} />
           )}
 
-          {/* Providers */}
-          {tab === 'providers' && !pLoading && (
-            <>
-              <div className="flex items-center justify-end mb-3">
-                <button onClick={() => setShowProviderForm(true)}
-                  className="flex items-center gap-1.5 h-7 px-3 rounded-md text-[11px] font-[510] text-text-quaternary hover:text-text-secondary hover:bg-hover cursor-pointer transition-colors"
-                  style={{ transitionDuration: '80ms' }}>
-                  <Plus className="w-3 h-3" /> Add provider
-                </button>
-              </div>
-              <div className="space-y-3">
-                {providers.map(p => <ProviderCard key={p.id} provider={p} />)}
-                {providers.length === 0 && (
-                  <p className="text-[13px] text-text-tertiary text-center py-12">No providers configured</p>
-                )}
-              </div>
-              <ProviderFormModal open={showProviderForm} onClose={() => setShowProviderForm(false)} />
-            </>
-          )}
+          {/* Providers — unified model registry view */}
+          {tab === 'providers' && <ProvidersTab />}
 
           {/* Connectors */}
           {tab === 'connectors' && !cLoading && (
