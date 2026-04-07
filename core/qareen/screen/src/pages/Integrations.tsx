@@ -28,9 +28,7 @@ const GLASS: React.CSSProperties = {
 
 const TABS = [
   { id: 'services', label: 'Services' },
-  { id: 'providers', label: 'Providers' },
-  { id: 'connectors', label: 'Connectors' },
-  { id: 'credentials', label: 'Credentials' },
+  { id: 'providers', label: 'Models' },
   { id: 'activity', label: 'Activity' },
 ] as const;
 type TabId = (typeof TABS)[number]['id'];
@@ -1024,16 +1022,19 @@ function ServiceCard({ service }: { service: ServiceGroup }) {
 
   return (
     <div
-      className="rounded-lg border border-border/50 hover:border-border-secondary transition-colors cursor-pointer"
+      className="rounded-lg border border-border/50 hover:border-border-secondary transition-colors"
       style={{
         transitionDuration: '80ms',
         borderLeftWidth: service.color ? 3 : undefined,
         borderLeftColor: service.color ?? undefined,
       }}
-      onClick={() => setExpanded(e => !e)}
     >
-      {/* Header */}
-      <div className="flex items-start gap-3 p-4">
+      {/* Header — clickable */}
+      <button
+        type="button"
+        className="w-full text-left flex items-start gap-3 p-4 cursor-pointer"
+        onClick={() => setExpanded(e => !e)}
+      >
         <div className="w-10 h-10 rounded-lg bg-bg-tertiary flex items-center justify-center shrink-0">
           <span className="text-[14px] font-[600] text-text-quaternary">
             {service.name.charAt(0)}
@@ -1068,7 +1069,7 @@ function ServiceCard({ service }: { service: ServiceGroup }) {
           </div>
         </div>
         <ChevronRight className={`w-4 h-4 text-text-quaternary shrink-0 mt-1 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
-      </div>
+      </button>
 
       {/* Expanded detail */}
       {expanded && (
@@ -1247,20 +1248,11 @@ function ServicesTab({ connectors, credentials }: { connectors: Connector[]; cre
 
 export default function IntegrationsPage() {
   const [tab, setTab] = useState<TabId>('services');
-  const [showConnectorForm, setShowConnectorForm] = useState(false);
-  const [showProviderForm, setShowProviderForm] = useState(false);
-  const { data: providers = [], isLoading: pLoading } = useProviders();
   const { data: connectorData, isLoading: cLoading } = useConnectors();
   const { data: credentials = [], isLoading: crLoading } = useCredentials();
-  const syncMut = useSyncConnectors();
-
-  const globalC = (connectorData?.global ?? []) as Connector[];
-  const projectC = (connectorData?.project ?? []) as Connector[];
-  const agentC = (connectorData?.agent ?? []) as Connector[];
 
   const allConnectors = (connectorData?.connectors ?? []) as Connector[];
-  const isLoading = (tab === 'providers' && pLoading) || (tab === 'connectors' && cLoading) || (tab === 'credentials' && crLoading) || (tab === 'services' && (cLoading || crLoading));
-  // Activity tab manages its own loading state internally
+  const isLoading = tab === 'services' && (cLoading || crLoading);
 
   return (
     <div className="h-full flex flex-col bg-bg">
@@ -1294,59 +1286,6 @@ export default function IntegrationsPage() {
 
           {/* Providers — unified model registry view */}
           {tab === 'providers' && <ProvidersTab />}
-
-          {/* Connectors */}
-          {tab === 'connectors' && !cLoading && (
-            <>
-              <div className="flex items-center justify-between mb-4">
-                <span className="text-[11px] text-text-quaternary">
-                  {connectorData?.configured ?? 0} of {connectorData?.total ?? 0} configured
-                </span>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => setShowConnectorForm(true)}
-                    className="flex items-center gap-1.5 h-7 px-3 rounded-md text-[11px] font-[510] text-text-quaternary hover:text-text-secondary hover:bg-hover cursor-pointer transition-colors"
-                    style={{ transitionDuration: '80ms' }}>
-                    <Plus className="w-3 h-3" />
-                  </button>
-                  <button onClick={() => syncMut.mutate()}
-                    className="flex items-center gap-1.5 h-7 px-3 rounded-md text-[11px] font-[510] text-text-quaternary hover:text-text-secondary hover:bg-hover cursor-pointer transition-colors"
-                    style={{ transitionDuration: '80ms' }}>
-                    <RefreshCw className={`w-3 h-3 ${syncMut.isPending ? 'animate-spin' : ''}`} /> Sync to harness
-                  </button>
-                </div>
-              </div>
-              <ConnectorFormModal open={showConnectorForm} onClose={() => setShowConnectorForm(false)} />
-
-              {globalC.length > 0 && (
-                <ScopeGroup label="Global" description="Every session" count={globalC.length}>
-                  {globalC.map(c => <ConnectorCard key={c.id} connector={c} />)}
-                </ScopeGroup>
-              )}
-              {projectC.length > 0 && (
-                <ScopeGroup label="Project" description="This directory" count={projectC.length}>
-                  {projectC.map(c => <ConnectorCard key={c.id} connector={c} />)}
-                </ScopeGroup>
-              )}
-              {agentC.length > 0 && (
-                <ScopeGroup label="Agent" description="When agent declares it" count={agentC.length}>
-                  {agentC.map(c => <ConnectorCard key={c.id} connector={c} />)}
-                </ScopeGroup>
-              )}
-            </>
-          )}
-
-          {/* Credentials */}
-          {tab === 'credentials' && !crLoading && (
-            <div>
-              {credentials.map(c => <CredentialRow key={c.name} credential={c} />)}
-              {credentials.length === 0 && (
-                <p className="text-[13px] text-text-tertiary text-center py-12">No credentials in manifest</p>
-              )}
-              <p className="text-[10px] text-text-quaternary/50 mt-6 text-center">
-                Values stored in macOS Keychain — manage with <span className="font-mono">agent-secret get/set</span>
-              </p>
-            </div>
-          )}
 
           {/* Activity */}
           {tab === 'activity' && <ActivityTab />}
