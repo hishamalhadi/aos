@@ -15,8 +15,14 @@ import numpy as np
 
 log = logging.getLogger("companion.stt")
 
-PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
-WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
+# Resolve from model registry, fall back to known defaults
+try:
+    from infra.models.resolve import resolve_stt
+    PARAKEET_MODEL = resolve_stt("parakeet")
+    WHISPER_MODEL = resolve_stt("preferred")
+except Exception:
+    PARAKEET_MODEL = "mlx-community/parakeet-tdt-0.6b-v3"
+    WHISPER_MODEL = "mlx-community/whisper-large-v3-turbo"
 SAMPLE_RATE = 16000
 
 # Known Whisper hallucination patterns

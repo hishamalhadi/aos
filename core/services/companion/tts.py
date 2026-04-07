@@ -15,7 +15,11 @@ import sounddevice as sd
 
 log = logging.getLogger("companion.tts")
 
-DEFAULT_MODEL = "mlx-community/Kokoro-82M-bf16"
+try:
+    from infra.models.resolve import resolve_tts
+    DEFAULT_MODEL = resolve_tts()
+except Exception:
+    DEFAULT_MODEL = "mlx-community/Kokoro-82M-bf16"
 DEFAULT_VOICE = "bf_emma"  # warm British female
 TTS_SAMPLE_RATE = 24000
 

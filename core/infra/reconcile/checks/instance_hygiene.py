@@ -107,7 +107,13 @@ def _stale_model_caches():
     if not cache_dir.is_dir():
         return []
 
-    active_model = "models--mlx-community--whisper-large-v3-turbo"
+    # Resolve preferred STT model from registry
+    try:
+        from infra.models.resolve import resolve_stt
+        _repo = resolve_stt("preferred")  # e.g. "mlx-community/whisper-large-v3-turbo"
+        active_model = "models--" + _repo.replace("/", "--")
+    except Exception:
+        active_model = "models--mlx-community--whisper-large-v3-turbo"
 
     stale = []
     for d in cache_dir.iterdir():

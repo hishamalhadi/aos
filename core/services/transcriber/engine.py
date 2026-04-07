@@ -25,7 +25,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # The one model. Loaded once, used everywhere.
-MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
+try:
+    from infra.models.resolve import resolve_stt
+    MODEL_REPO = resolve_stt("preferred")
+except Exception:
+    MODEL_REPO = "mlx-community/whisper-large-v3-turbo"
 _engine = None
 
 # Arabic Unicode range for detecting Arabic script in text
