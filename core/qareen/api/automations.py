@@ -107,6 +107,204 @@ TIER_LABELS = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Node executor — modular per-type execution with real API calls
+# ---------------------------------------------------------------------------
+
+_AGENT_SECRET = AOS_HOME / "core" / "bin" / "cli" / "agent-secret"
+
+
+def _secret(key: str) -> str:
+    """Read a secret from macOS Keychain."""
+    import subprocess as _sp
+    r = _sp.run([str(_AGENT_SECRET), "get", key], capture_output=True, text=True, timeout=5)
+    val = r.stdout.strip()
+    if not val or r.returncode != 0 or val.startswith("Error"):
+        return ""
+    return val
+
+
+async def _exec_trigger(node: dict, prev_outputs: dict) -> list:
+    """Trigger nodes produce a single empty item."""
+    return [{}]
+
+
+async def _exec_gmail(node: dict, prev_outputs: dict) -> list:
+    """Execute Gmail node — real API call."""
+    import httpx
+    token_dir = Path.home() / ".google_workspace_mcp" / "credentials"
+    token_files = sorted(token_dir.glob("*.json"))
+    if not token_files:
+        raise RuntimeError("No Google credentials found")
+
+    cred_data = json.loads(token_files[0].read_text())
+    client_id = _secret("GOOGLE_OAUTH_CLIENT_ID") or _secret("GOOGLE_CLIENT_ID")
+    client_secret = _secret("GOOGLE_OAUTH_CLIENT_SECRET") or _secret("GOOGLE_CLIENT_SECRET")
+
+    async with httpx.AsyncClient() as http:
+        tok = await http.post("https://oauth2.googleapis.com/token", data={
+            "client_id": client_id, "client_secret": client_secret,
+            "refresh_token": cred_data.get("refresh_token", ""),
+            "grant_type": "refresh_token",
+        })
+        access_token = tok.json().get("access_token", "")
+        if not access_token:
+            raise RuntimeError("Failed to refresh Google token")
+
+        limit = node.get("parameters", {}).get("limit", 5)
+        resp = await http.get(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            params={"maxResults": limit, "q": "is:unread", "labelIds": "INBOX"},
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+        if resp.status_code != 200:
+            raise RuntimeError(f"Gmail API: {resp.status_code}")
+
+        messages = resp.json().get("messages", [])
+        emails = []
+        for msg in messages[:limit]:
+            detail = await http.get(
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
+                params={"format": "metadata", "metadataHeaders": ["From", "Subject"]},
+                headers={"Authorization": f"Bearer {access_token}"},
+            )
+            if detail.status_code == 200:
+                hdrs = {h["name"]: h["value"] for h in detail.json().get("payload", {}).get("headers", [])}
+                emails.append({
+                    "from": hdrs.get("From", "?"),
+                    "subject": hdrs.get("Subject", "(no subject)"),
+                    "snippet": detail.json().get("snippet", "")[:100],
+                })
+    return emails
+
+
+async def _exec_telegram(node: dict, prev_outputs: dict) -> list:
+    """Execute Telegram node — real Bot API call."""
+    import httpx
+    bot_token = _secret("TELEGRAM_BOT_TOKEN")
+    chat_id = node.get("parameters", {}).get("chatId", "")
+
+    prev = list(prev_outputs.values())[-1] if prev_outputs else [{}]
+    text = prev[0].get("text", "Automation ran successfully") if prev else "No data"
+
+    async with httpx.AsyncClient() as http:
+        tg = await http.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
+            "chat_id": chat_id, "text": text,
+        })
+        if tg.status_code != 200:
+            raise RuntimeError(f"Telegram API: {tg.status_code} {tg.text[:100]}")
+    return [{"sent": True, "chat_id": chat_id}]
+
+
+async def _exec_http_request(node: dict, prev_outputs: dict) -> list:
+    """Execute HTTP Request node — real HTTP call."""
+    import httpx
+    params = node.get("parameters", {})
+    method = params.get("method", "GET")
+    url = params.get("url", "")
+    if not url:
+        raise RuntimeError("No URL specified")
+
+    async with httpx.AsyncClient(timeout=30.0) as http:
+        resp = await http.request(method, url)
+        try:
+            body = resp.json()
+        except Exception:
+            body = {"text": resp.text[:500]}
+    return [{"statusCode": resp.status_code, "body": body}]
+
+
+async def _exec_code(node: dict, prev_outputs: dict) -> list:
+    """Code node — pass through previous items with a note. Cannot execute JS."""
+    prev = list(prev_outputs.values())[-1] if prev_outputs else []
+    if isinstance(prev, list) and prev:
+        lines = []
+        for i, item in enumerate(prev[:10]):
+            subj = str(item.get("subject", item.get("summary", ""))).replace("*", "")
+            frm = str(item.get("from", "")).replace("*", "")
+            if subj or frm:
+                lines.append(f"{i+1}. {subj}\n   From: {frm}")
+        text = f"Digest — {len(prev)} items\n\n" + "\n\n".join(lines) if lines else str(prev[0])
+    else:
+        text = "No items to process"
+    return [{"text": text}]
+
+
+async def _exec_passthrough(node: dict, prev_outputs: dict) -> list:
+    """Unknown node — pass through previous output."""
+    prev = list(prev_outputs.values())[-1] if prev_outputs else [{}]
+    return prev if isinstance(prev, list) else [prev]
+
+
+# Node type → executor mapping
+_NODE_EXECUTORS: dict = {
+    "scheduleTrigger": _exec_trigger,
+    "manualTrigger": _exec_trigger,
+    "webhook": _exec_trigger,
+    "gmail": _exec_gmail,
+    "googleCalendar": _exec_passthrough,
+    "telegram": _exec_telegram,
+    "httpRequest": _exec_http_request,
+    "code": _exec_code,
+    "set": _exec_passthrough,
+    "if": _exec_passthrough,
+    "switch": _exec_passthrough,
+}
+
+
+def _match_executor(node_type: str):
+    """Find the executor for a node type by matching against the registry."""
+    type_lower = node_type.lower()
+    for key, fn in _NODE_EXECUTORS.items():
+        if key.lower() in type_lower:
+            return fn, key != "code"  # (executor, is_real)
+    return _exec_passthrough, False
+
+
+async def _execute_workflow_nodes(nodes: list[dict]) -> dict:
+    """Execute workflow nodes sequentially, returning per-node results."""
+    node_results = []
+    node_outputs: dict = {}
+
+    for node in nodes:
+        node_name = node.get("name", "Unknown")
+        node_type = node.get("type", "")
+        start_time = datetime.utcnow()
+        executor, is_real = _match_executor(node_type)
+
+        try:
+            items = await executor(node, node_outputs)
+            node_outputs[node_name] = items
+            dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            node_results.append({
+                "node": node_name,
+                "status": "success",
+                "duration_ms": dur,
+                "items": len(items) if isinstance(items, list) else 1,
+                "error": None,
+                "simulated": not is_real,
+            })
+        except Exception as e:
+            dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+            node_results.append({
+                "node": node_name,
+                "status": "error",
+                "duration_ms": dur,
+                "items": 0,
+                "error": str(e)[:200],
+                "simulated": False,
+            })
+            break
+
+    overall = "error" if any(r["status"] == "error" for r in node_results) else "success"
+    overall_error = next((r["error"] for r in node_results if r["error"]), None)
+    return {"status": overall, "node_results": node_results, "error": overall_error}
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
 @router.get("")
 async def list_automations(request: Request) -> JSONResponse:
     """List system crons."""
@@ -177,7 +375,7 @@ async def run_automation(automation_id: str, request: Request) -> JSONResponse:
         except Exception as e:
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
-    # n8n-powered automation — execute workflow and return per-node results
+    # n8n-powered automation — execute workflow via custom node executor
     n8n_client = getattr(request.app.state, "n8n_client", None)
     if not n8n_client:
         return JSONResponse({"error": "n8n not available"}, status_code=503)
@@ -189,10 +387,6 @@ async def run_automation(automation_id: str, request: Request) -> JSONResponse:
     wf_id = auto["n8n_workflow_id"]
 
     try:
-        import subprocess as _sp
-        import httpx
-
-        # Get the workflow to understand its nodes
         workflow = await n8n_client.get_workflow(wf_id)
         nodes = workflow.get("nodes", [])
 
@@ -210,124 +404,7 @@ async def run_automation(automation_id: str, request: Request) -> JSONResponse:
         except Exception:
             logger.debug("Pre-flight check unavailable, proceeding")
 
-        node_results = []
-        node_outputs: dict = {}
-
-        agent_secret = AOS_HOME / "core" / "bin" / "cli" / "agent-secret"
-
-        # Execute each node in sequence, tracking success/failure
-        for node in nodes:
-            node_name = node.get("name", "Unknown")
-            node_type = node.get("type", "")
-            start_time = datetime.utcnow()
-
-            try:
-                if "scheduleTrigger" in node_type or "manualTrigger" in node_type:
-                    # Trigger nodes just produce an empty item
-                    node_outputs[node_name] = [{}]
-                    node_results.append({
-                        "node": node_name,
-                        "status": "success",
-                        "duration_ms": 0,
-                        "items": 1,
-                        "error": None,
-                    })
-
-                elif "gmail" in node_type.lower():
-                    # Fetch emails via Gmail API
-                    token_file = Path.home() / ".google_workspace_mcp" / "credentials"
-                    # Find first available token
-                    token_files = sorted(token_file.glob("*.json"))
-                    if not token_files:
-                        raise RuntimeError("No Google credentials found")
-
-                    # Refresh token
-                    cred_data = json.loads(token_files[0].read_text())
-                    client_id = _sp.run([str(agent_secret), "get", "GOOGLE_CLIENT_ID"], capture_output=True, text=True, timeout=5).stdout.strip()
-                    if not client_id or client_id.startswith("Error"):
-                        client_id = _sp.run([str(agent_secret), "get", "GOOGLE_OAUTH_CLIENT_ID"], capture_output=True, text=True, timeout=5).stdout.strip()
-                    client_secret = _sp.run([str(agent_secret), "get", "GOOGLE_CLIENT_SECRET"], capture_output=True, text=True, timeout=5).stdout.strip()
-                    if not client_secret or client_secret.startswith("Error"):
-                        client_secret = _sp.run([str(agent_secret), "get", "GOOGLE_OAUTH_CLIENT_SECRET"], capture_output=True, text=True, timeout=5).stdout.strip()
-
-                    async with httpx.AsyncClient() as http:
-                        token_resp = await http.post("https://oauth2.googleapis.com/token", data={
-                            "client_id": client_id, "client_secret": client_secret,
-                            "refresh_token": cred_data.get("refresh_token", ""),
-                            "grant_type": "refresh_token",
-                        })
-                        access_token = token_resp.json().get("access_token", "")
-
-                        limit = node.get("parameters", {}).get("limit", 5)
-                        resp = await http.get(
-                            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-                            params={"maxResults": limit, "q": "is:unread", "labelIds": "INBOX"},
-                            headers={"Authorization": f"Bearer {access_token}"},
-                        )
-                        if resp.status_code != 200:
-                            raise RuntimeError(f"Gmail API: {resp.status_code}")
-
-                        messages = resp.json().get("messages", [])
-                        emails = []
-                        for msg in messages[:limit]:
-                            detail = await http.get(
-                                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{msg['id']}",
-                                params={"format": "metadata", "metadataHeaders": ["From", "Subject"]},
-                                headers={"Authorization": f"Bearer {access_token}"},
-                            )
-                            if detail.status_code == 200:
-                                headers = {h["name"]: h["value"] for h in detail.json().get("payload", {}).get("headers", [])}
-                                emails.append({"from": headers.get("From", "?"), "subject": headers.get("Subject", "(no subject)"), "snippet": detail.json().get("snippet", "")[:100]})
-
-                    node_outputs[node_name] = emails
-                    dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-                    node_results.append({"node": node_name, "status": "success", "duration_ms": dur, "items": len(emails), "error": None})
-
-                elif "code" in node_type.lower():
-                    # Code node — we can't execute arbitrary JS, but we can simulate the output
-                    prev_items = list(node_outputs.values())[-1] if node_outputs else []
-                    if isinstance(prev_items, list) and prev_items:
-                        lines = []
-                        for i, e in enumerate(prev_items[:10]):
-                            subj = str(e.get("subject", e.get("summary", ""))).replace("*", "")
-                            frm = str(e.get("from", "")).replace("*", "")
-                            lines.append(f"{i+1}. {subj}\n   From: {frm}")
-                        text = f"Email Digest — {len(prev_items)} unread\n\n" + "\n\n".join(lines)
-                    else:
-                        text = "No items to process"
-                    node_outputs[node_name] = [{"text": text}]
-                    node_results.append({"node": node_name, "status": "success", "duration_ms": 1, "items": 1, "error": None})
-
-                elif "telegram" in node_type.lower():
-                    # Send via Telegram Bot API
-                    bot_token = _sp.run([str(agent_secret), "get", "TELEGRAM_BOT_TOKEN"], capture_output=True, text=True, timeout=5).stdout.strip()
-                    chat_id = node.get("parameters", {}).get("chatId", "")
-
-                    # Get the text from previous node output
-                    prev = list(node_outputs.values())[-1] if node_outputs else [{}]
-                    text = prev[0].get("text", "Automation ran successfully") if prev else "No data"
-
-                    async with httpx.AsyncClient() as http:
-                        tg = await http.post(f"https://api.telegram.org/bot{bot_token}/sendMessage", json={
-                            "chat_id": chat_id, "text": text,
-                        })
-                        if tg.status_code != 200:
-                            raise RuntimeError(f"Telegram API: {tg.status_code} {tg.text[:100]}")
-
-                    dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-                    node_results.append({"node": node_name, "status": "success", "duration_ms": dur, "items": 1, "error": None})
-
-                else:
-                    # Unknown node type — skip with success
-                    node_results.append({"node": node_name, "status": "success", "duration_ms": 0, "items": 0, "error": None})
-
-            except Exception as node_err:
-                dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-                node_results.append({"node": node_name, "status": "error", "duration_ms": dur, "items": 0, "error": str(node_err)[:200]})
-                break  # Stop execution on first error
-
-        overall = "error" if any(r["status"] == "error" for r in node_results) else "success"
-        overall_error = next((r["error"] for r in node_results if r["error"]), None)
+        result = await _execute_workflow_nodes(nodes)
 
         # Update tracking
         try:
@@ -335,18 +412,15 @@ async def run_automation(automation_id: str, request: Request) -> JSONResponse:
             conn.execute(
                 """UPDATE automations SET last_run_at = ?, last_run_status = ?,
                    run_count = run_count + 1, error_message = ? WHERE id = ?""",
-                (datetime.utcnow().isoformat(), overall, overall_error, automation_id),
+                (datetime.utcnow().isoformat(), result["status"],
+                 result["error"], automation_id),
             )
             conn.commit()
             conn.close()
         except Exception:
             pass
 
-        return JSONResponse({
-            "status": overall,
-            "node_results": node_results,
-            "error": overall_error,
-        })
+        return JSONResponse(result)
 
     except Exception as e:
         logger.exception("Run automation failed")
@@ -725,52 +799,124 @@ async def deploy_automation(request: Request) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
-@router.post("/{automation_id}/activate")
-async def activate_automation(automation_id: str, request: Request) -> JSONResponse:
-    """Activate an n8n-powered automation."""
-    n8n_client = getattr(request.app.state, "n8n_client", None)
-    if not n8n_client:
-        return JSONResponse({"error": "n8n not available"}, status_code=503)
+# ---------------------------------------------------------------------------
+# Lifecycle state machine — unified status transitions with n8n sync
+# ---------------------------------------------------------------------------
 
+# Valid transitions: {current_status: {action: new_status}}
+_TRANSITIONS: dict[str, dict[str, str]] = {
+    "draft":    {"activate": "active", "archive": "archived", "delete": "_delete"},
+    "active":   {"pause": "paused", "deactivate": "paused", "archive": "archived", "delete": "_delete"},
+    "paused":   {"resume": "active", "activate": "active", "archive": "archived", "delete": "_delete"},
+    "error":    {"activate": "active", "resume": "active", "archive": "archived", "delete": "_delete"},
+    "archived": {"activate": "active", "delete": "_delete"},
+}
+
+
+async def _transition_status(
+    automation_id: str, action: str, n8n_client,
+) -> dict:
+    """Execute a lifecycle transition with n8n sync.
+
+    Returns {"status": new_status} on success.
+    Raises ValueError for invalid transitions.
+    """
     auto = _get_n8n_automation(automation_id)
     if not auto:
-        return JSONResponse({"error": "not found"}, status_code=404)
+        raise ValueError("Automation not found")
 
-    try:
-        await n8n_client.activate_workflow(auto["n8n_workflow_id"])
-        conn = _get_db()
-        conn.execute(
-            "UPDATE automations SET status = 'active', activated_at = ? WHERE id = ?",
-            (datetime.utcnow().isoformat(), automation_id),
+    current = auto.get("status", "draft")
+    allowed = _TRANSITIONS.get(current, {})
+    if action not in allowed:
+        raise ValueError(
+            f"Cannot '{action}' from '{current}'. "
+            f"Allowed: {', '.join(allowed.keys()) if allowed else 'none'}"
         )
+
+    new_status = allowed[action]
+    wf_id = auto.get("n8n_workflow_id")
+
+    # n8n side effects
+    if new_status == "active" and wf_id and n8n_client:
+        await n8n_client.activate_workflow(wf_id)
+    elif new_status in ("paused", "archived") and wf_id and n8n_client:
+        try:
+            await n8n_client.deactivate_workflow(wf_id)
+        except Exception:
+            pass  # OK if already inactive
+
+    # Delete path
+    if new_status == "_delete":
+        if wf_id and n8n_client:
+            try:
+                await n8n_client.deactivate_workflow(wf_id)
+            except Exception:
+                pass
+            try:
+                await n8n_client.delete_workflow(wf_id)
+            except Exception:
+                logger.warning(f"Failed to delete n8n workflow {wf_id}")
+        conn = _get_db()
+        conn.execute("DELETE FROM automations WHERE id = ?", (automation_id,))
         conn.commit()
         conn.close()
-        return JSONResponse({"status": "active"})
+        return {"status": "deleted", "id": automation_id}
+
+    # Update DB
+    conn = _get_db()
+    if new_status == "active":
+        conn.execute(
+            "UPDATE automations SET status = ?, activated_at = ? WHERE id = ?",
+            (new_status, datetime.utcnow().isoformat(), automation_id),
+        )
+    else:
+        conn.execute(
+            "UPDATE automations SET status = ? WHERE id = ?",
+            (new_status, automation_id),
+        )
+    conn.commit()
+    conn.close()
+    return {"status": new_status, "id": automation_id}
+
+
+@router.patch("/{automation_id}/status")
+async def update_automation_status(automation_id: str, request: Request) -> JSONResponse:
+    """Unified lifecycle transition: activate, pause, resume, archive, delete."""
+    n8n_client = getattr(request.app.state, "n8n_client", None)
+    body = await request.json()
+    action = body.get("action", "")
+
+    if not action:
+        return JSONResponse({"error": "action required"}, status_code=400)
+
+    try:
+        result = await _transition_status(automation_id, action, n8n_client)
+        return JSONResponse(result)
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
+# Backward-compat endpoints — delegate to lifecycle engine
+@router.post("/{automation_id}/activate")
+async def activate_automation(automation_id: str, request: Request) -> JSONResponse:
+    n8n_client = getattr(request.app.state, "n8n_client", None)
+    try:
+        return JSONResponse(await _transition_status(automation_id, "activate", n8n_client))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
 @router.post("/{automation_id}/deactivate")
 async def deactivate_automation(automation_id: str, request: Request) -> JSONResponse:
-    """Pause an n8n-powered automation."""
     n8n_client = getattr(request.app.state, "n8n_client", None)
-    if not n8n_client:
-        return JSONResponse({"error": "n8n not available"}, status_code=503)
-
-    auto = _get_n8n_automation(automation_id)
-    if not auto:
-        return JSONResponse({"error": "not found"}, status_code=404)
-
     try:
-        await n8n_client.deactivate_workflow(auto["n8n_workflow_id"])
-        conn = _get_db()
-        conn.execute(
-            "UPDATE automations SET status = 'paused' WHERE id = ?",
-            (automation_id,),
-        )
-        conn.commit()
-        conn.close()
-        return JSONResponse({"status": "paused"})
+        return JSONResponse(await _transition_status(automation_id, "pause", n8n_client))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

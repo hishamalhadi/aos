@@ -180,6 +180,30 @@ export function useDeactivateAutomation() {
   });
 }
 
+export type LifecycleAction = 'activate' | 'pause' | 'resume' | 'archive' | 'delete';
+
+export function useAutomationLifecycle() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, action }: { id: string; action: LifecycleAction }) => {
+      const res = await fetch(`/api/automations/${id}/status`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        throw new Error(err.error || `Failed: ${res.status}`);
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['n8n-automations'] });
+      qc.invalidateQueries({ queryKey: ['automations-health'] });
+    },
+  });
+}
+
 export interface AutomationContext {
   telegram_chat_id: string | null;
   connected_accounts: string[];

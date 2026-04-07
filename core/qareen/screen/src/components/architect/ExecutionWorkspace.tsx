@@ -2,10 +2,14 @@
  * ExecutionWorkspace — Tabbed right panel for the Automation Architect.
  * Tabs: Flow (step cards), Trace, Waterfall, Output.
  * Tab strip uses glass pill pattern per DESIGN.md.
+ * Test Run button pinned at bottom.
  */
-import { Activity, BarChart3, FileOutput, Workflow } from 'lucide-react';
+import { BarChart3, Workflow } from 'lucide-react';
 import { FlowTab } from './tabs/FlowTab';
+import { TraceTab } from './tabs/TraceTab';
+import { OutputTab } from './tabs/OutputTab';
 import { ReadinessBar } from './ReadinessBar';
+import { TestRunButton } from './execution/TestRunButton';
 import { useArchitectStore, type WorkspaceTab } from '@/store/architect';
 
 const TABS: { id: WorkspaceTab; label: string }[] = [
@@ -68,12 +72,14 @@ function EmptyTab({ icon: Icon, message }: { icon: typeof Workflow; message: str
 export function ExecutionWorkspace() {
   const activeTab = useArchitectStore((s) => s.activeTab);
   const setActiveTab = useArchitectStore((s) => s.setActiveTab);
+  const spec = useArchitectStore((s) => s.spec);
 
   return (
     <div className="flex flex-col h-full">
       {/* Glass pill tab strip */}
-      <div className="shrink-0 px-4 pt-3 pb-1">
+      <div className="shrink-0 px-4 pt-3 pb-1 flex items-center justify-between">
         <GlassPillTabs active={activeTab} onChange={setActiveTab} />
+        {spec && <TestRunButton />}
       </div>
 
       {/* Readiness bar — auto-hides when spec has no steps */}
@@ -82,9 +88,9 @@ export function ExecutionWorkspace() {
       {/* Tab content */}
       <div className="flex-1 min-h-0">
         {activeTab === 'flow' && <FlowTab />}
-        {activeTab === 'trace' && <EmptyTab icon={Activity} message="Run a test to see trace" />}
+        {activeTab === 'trace' && <TraceTab />}
         {activeTab === 'waterfall' && <EmptyTab icon={BarChart3} message="Run a test to see timing" />}
-        {activeTab === 'output' && <EmptyTab icon={FileOutput} message="Run a test to see output" />}
+        {activeTab === 'output' && <OutputTab />}
       </div>
     </div>
   );
