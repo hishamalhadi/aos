@@ -15,6 +15,7 @@ import {
   useProviderModels,
   type AgentConfig,
 } from '@/hooks/useAgentConfig';
+import { useConnectors, type Connector } from '@/hooks/useIntegrations';
 import type { ReactNode } from 'react';
 
 // ============================================================
@@ -190,6 +191,27 @@ export default function AgentConfigPage() {
   const options = useAgentOptions();
   const saveMutation = useSaveConfig();
   const providerModels = useProviderModels();
+  const { data: connectorData } = useConnectors();
+
+  // Build display name labels for MCP servers and skills
+  const mcpLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const c of (connectorData?.connectors ?? []) as Connector[]) {
+      if (c.id && c.display_name && c.id !== c.display_name) {
+        labels[c.id] = c.display_name;
+      }
+    }
+    return labels;
+  }, [connectorData]);
+
+  const skillLabels = useMemo(() => {
+    const labels: Record<string, string> = {};
+    for (const s of options.skills) {
+      const pretty = s.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      if (pretty !== s) labels[s] = pretty;
+    }
+    return labels;
+  }, [options.skills]);
   const modelOptions = useMemo(
     () => providerModels.map(m => ({ value: m.value, label: m.label })),
     [providerModels],
@@ -335,12 +357,12 @@ export default function AgentConfigPage() {
 
             <Field label="Skills" hint="Skills loaded into the agent's context at startup.">
               <TagPicker selected={form.skills ?? config.skills} available={options.skills}
-                onChange={v => updateField('skills', v)} disabled={disabled} />
+                onChange={v => updateField('skills', v)} disabled={disabled} labels={skillLabels} />
             </Field>
 
             <Field label="MCP servers" hint="External tool servers this agent can access.">
               <TagPicker selected={form.mcp_servers ?? config.mcp_servers} available={options.mcpServers}
-                onChange={v => updateField('mcp_servers', v)} disabled={disabled} />
+                onChange={v => updateField('mcp_servers', v)} disabled={disabled} labels={mcpLabels} />
             </Field>
           </>)}
 
