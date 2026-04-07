@@ -7,7 +7,7 @@ import {
 import type { ReactNode } from 'react';
 import {
   useProviders, useConnectors, useCredentials, useSyncConnectors,
-  useAddConnector, useAddProvider,
+  useAddConnector, useAddProvider, useUpdateConnector,
   type Provider, type Connector, type Credential,
 } from '@/hooks/useIntegrations';
 import { useExecutions, useExecutionSummary, type Execution } from '@/hooks/useExecutions';
@@ -90,7 +90,19 @@ const RUNTIME_LABELS: Record<string, string> = {
   local: 'Local',
 };
 
+const PURPOSE_USAGE: Record<string, string> = {
+  execution: 'Used by: Execution Router — routes agent work to this provider',
+  stt: 'Used by: Voice Manager, Companion STT, Transcriber, Bridge',
+  tts: 'Used by: Companion TTS — generates spoken responses',
+  embeddings: 'Used by: QMD — vector search over vault documents',
+  reranking: 'Used by: QMD — reranks search results for relevance',
+  expansion: 'Used by: QMD — expands queries for better recall',
+  codec: 'Used by: Orpheus TTS pipeline — audio encoding',
+  diarization: 'Used by: Meeting Companion — speaker identification',
+};
+
 function ModelCard({ model }: { model: Model }) {
+  const [expanded, setExpanded] = useState(false);
   const isRemote = model.source === 'api' || model.source === 'system';
   const isRunning = model.running;
   const statusColor =
@@ -100,42 +112,89 @@ function ModelCard({ model }: { model: Model }) {
     'text-text-quaternary bg-[rgba(255,245,235,0.04)]';
 
   return (
-    <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[rgba(255,245,235,0.03)] transition-colors" style={{ transitionDuration: '80ms' }}>
-      <div className="w-8 h-8 rounded-md bg-bg-tertiary flex items-center justify-center shrink-0">
-        {isRemote
-          ? <ProviderIcon type={model.runtime} />
-          : <span className="text-[11px] font-[600] text-text-quaternary">{RUNTIME_LABELS[model.runtime]?.charAt(0) ?? '?'}</span>
-        }
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] font-[560] text-text">{model.name}</span>
-          {model.status === 'preferred' && (
-            <span className={`text-[8px] font-[510] px-1.5 py-0.5 rounded ${statusColor}`}>preferred</span>
-          )}
-          {model.is_default && (
-            <span className="text-[8px] font-[510] text-accent/70 bg-accent/8 px-1.5 py-0.5 rounded">default</span>
-          )}
-          {isRunning && (
-            <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
-          )}
+    <div className="cursor-pointer" onClick={() => setExpanded(e => !e)}>
+      <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-[rgba(255,245,235,0.03)] transition-colors" style={{ transitionDuration: '80ms' }}>
+        <div className="w-8 h-8 rounded-md bg-bg-tertiary flex items-center justify-center shrink-0">
+          {isRemote
+            ? <ProviderIcon type={model.runtime} />
+            : <span className="text-[11px] font-[600] text-text-quaternary">{RUNTIME_LABELS[model.runtime]?.charAt(0) ?? '?'}</span>
+          }
         </div>
-        <div className="flex items-center gap-2 mt-0.5 text-[10px] text-text-quaternary">
-          <span className="font-mono">{RUNTIME_LABELS[model.runtime] ?? model.runtime}</span>
-          {model.size_gb != null && model.size_gb > 0 && (
-            <span>{model.size_gb.toFixed(1)}GB</span>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-[13px] font-[560] text-text">{model.name}</span>
+            {model.status === 'preferred' && (
+              <span className={`text-[8px] font-[510] px-1.5 py-0.5 rounded ${statusColor}`}>preferred</span>
+            )}
+            {model.is_default && (
+              <span className="text-[8px] font-[510] text-accent/70 bg-accent/8 px-1.5 py-0.5 rounded">default</span>
+            )}
+            {isRunning && (
+              <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-text-quaternary">
+            <span className="font-mono">{RUNTIME_LABELS[model.runtime] ?? model.runtime}</span>
+            {model.size_gb != null && model.size_gb > 0 && (
+              <span>{model.size_gb.toFixed(1)}GB</span>
+            )}
+            {model.credential && (
+              <span className="flex items-center gap-0.5">
+                <KeyRound className="w-2.5 h-2.5" />
+                {model.credential}
+              </span>
+            )}
+            {model.model_ids && model.model_ids.length > 0 && (
+              <span>{model.model_ids.length} models</span>
+            )}
+          </div>
+        </div>
+        <ChevronRight className={`w-3.5 h-3.5 text-text-quaternary shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
+      </div>
+
+      {expanded && (
+        <div className="px-3 pb-3 pt-1 space-y-2 text-[10px]">
+          {/* Location */}
+          {(model.repo || model.path) && (
+            <div className="flex items-start gap-2">
+              <span className="text-text-quaternary w-14 shrink-0">Location</span>
+              <span className="font-mono text-text-tertiary break-all">{model.repo ?? model.path}</span>
+            </div>
           )}
-          {model.credential && (
-            <span className="flex items-center gap-0.5">
-              <KeyRound className="w-2.5 h-2.5" />
-              {model.credential}
-            </span>
+          {model.endpoint && (
+            <div className="flex items-start gap-2">
+              <span className="text-text-quaternary w-14 shrink-0">Endpoint</span>
+              <span className="font-mono text-text-tertiary">{model.endpoint}</span>
+            </div>
           )}
+          <div className="flex items-start gap-2">
+            <span className="text-text-quaternary w-14 shrink-0">Source</span>
+            <span className="text-text-tertiary">{model.source}</span>
+          </div>
+          <div className="flex items-start gap-2">
+            <span className="text-text-quaternary w-14 shrink-0">Status</span>
+            <span className={`px-1.5 py-0.5 rounded ${statusColor}`}>{model.status}</span>
+          </div>
+          {/* Usage */}
+          {PURPOSE_USAGE[model.purpose] && (
+            <div className="flex items-start gap-2">
+              <span className="text-text-quaternary w-14 shrink-0">Usage</span>
+              <span className="text-text-tertiary">{PURPOSE_USAGE[model.purpose]}</span>
+            </div>
+          )}
+          {/* Model IDs */}
           {model.model_ids && model.model_ids.length > 0 && (
-            <span>{model.model_ids.length} models</span>
+            <div className="flex items-start gap-2">
+              <span className="text-text-quaternary w-14 shrink-0">Models</span>
+              <div className="flex flex-wrap gap-1">
+                {model.model_ids.map(m => (
+                  <span key={m} className="font-mono text-text-tertiary bg-[rgba(255,245,235,0.04)] rounded px-1.5 py-0.5">{m}</span>
+                ))}
+              </div>
+            </div>
           )}
         </div>
-      </div>
+      )}
     </div>
   );
 }
@@ -903,6 +962,59 @@ function ServiceStatusBadge({ status }: { status: string }) {
   );
 }
 
+function ConnectorConfigEditor({ connector }: { connector: Connector }) {
+  const updateConnector = useUpdateConnector();
+  const [editing, setEditing] = useState(false);
+  const [scope, setScope] = useState(connector.scope);
+  const [saved, setSaved] = useState(false);
+
+  const handleScopeChange = (newScope: string) => {
+    setScope(newScope);
+    updateConnector.mutate(
+      { id: connector.id, patch: { scope: newScope } },
+      {
+        onSuccess: () => {
+          setSaved(true);
+          setTimeout(() => setSaved(false), 1500);
+        },
+      },
+    );
+  };
+
+  return (
+    <div className="pt-3" onClick={e => e.stopPropagation()}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Configuration</span>
+        {saved && <span className="text-[9px] text-green font-[510]"><Check className="w-2.5 h-2.5 inline" /> Saved</span>}
+      </div>
+      <div className="space-y-2 text-[10px]">
+        <div className="flex items-center gap-2">
+          <span className="text-text-quaternary w-12">Scope</span>
+          <select
+            value={scope}
+            onChange={e => handleScopeChange(e.target.value)}
+            className="h-6 px-2 rounded text-[10px] bg-bg-tertiary border border-border/30 text-text-secondary outline-none cursor-pointer"
+          >
+            <option value="global">global</option>
+            <option value="project">project</option>
+            <option value="agent">agent</option>
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-text-quaternary w-12">Type</span>
+          <span className="font-mono text-text-tertiary">{connector.type}</span>
+        </div>
+        {connector.credential && (
+          <div className="flex items-center gap-2">
+            <span className="text-text-quaternary w-12">Key</span>
+            <span className="font-mono text-text-tertiary">{connector.credential}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ServiceCard({ service }: { service: ServiceGroup }) {
   const [expanded, setExpanded] = useState(false);
   const conn = service.connector;
@@ -1024,25 +1136,21 @@ function ServiceCard({ service }: { service: ServiceGroup }) {
             </div>
           )}
 
-          {/* Configuration */}
-          {conn && (
+          {/* Configuration — editable */}
+          {conn && conn.is_configured && (
+            <ConnectorConfigEditor connector={conn} />
+          )}
+          {conn && !conn.is_configured && (
             <div className="pt-3">
               <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary block mb-2">Configuration</span>
-              <div className="space-y-1 text-[10px]">
+              <div className="space-y-1 text-[10px] text-text-quaternary">
                 <div className="flex items-center gap-2">
-                  <span className="text-text-quaternary w-12">Scope</span>
-                  <span className="font-mono text-text-tertiary">{conn.scope}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-text-quaternary w-12">Type</span>
+                  <span className="w-12">Type</span>
                   <span className="font-mono text-text-tertiary">{conn.type}</span>
                 </div>
-                {conn.credential && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-text-quaternary w-12">Key</span>
-                    <span className="font-mono text-text-tertiary">{conn.credential}</span>
-                  </div>
-                )}
+                <p className="text-[10px] text-text-quaternary/60 pt-2 italic">
+                  Discovered on this machine but not configured as a connector
+                </p>
               </div>
             </div>
           )}
@@ -1157,8 +1265,8 @@ export default function IntegrationsPage() {
   return (
     <div className="h-full flex flex-col bg-bg">
       {/* Content */}
-      <div className="flex-1 overflow-y-auto px-6 pb-8">
-        <div className="max-w-[680px] mx-auto">
+      <div className="flex-1 overflow-y-auto pb-8">
+        <div className="max-w-[720px] mx-auto px-6">
           {/* Tab pills — centered below nav chrome */}
           <div className="flex justify-center pt-12 pb-4">
             <div className="inline-flex items-center gap-0.5 h-8 px-1.5 rounded-full bg-bg-tertiary border border-border">
