@@ -44,7 +44,29 @@ def wire_bus(bus: Any) -> None:
 
 
 def _load_providers() -> dict[str, Any]:
-    """Load provider configs from yaml."""
+    """Load execution providers from model registry, falling back to providers.yaml."""
+    # Try model registry first
+    try:
+        from infra.models.discover import load_registry
+        registry = load_registry()
+        providers = {}
+        for mid, m in registry.items():
+            if m.get("purpose") != "execution":
+                continue
+            providers[mid] = {
+                "type": m.get("runtime", "api"),
+                "display_name": m.get("name", mid),
+                "endpoint": m.get("endpoint"),
+                "credential": m.get("credential"),
+                "models": m.get("model_ids", []),
+                "is_default": m.get("is_default", False),
+            }
+        if providers:
+            return providers
+    except Exception:
+        pass
+
+    # Fall back to providers.yaml
     if PROVIDERS_FILE.is_file():
         try:
             data = yaml.safe_load(PROVIDERS_FILE.read_text())

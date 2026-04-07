@@ -87,10 +87,18 @@ def _transcribe_fallback(wav_path: str) -> str:
         logger.error("No transcriber venv found")
         return "[transcription unavailable — transcriber service not running]"
 
+    # Resolve STT model from registry
+    try:
+        import sys as _sys; _sys.path.insert(0, str(Path.home() / "aos" / "core"))
+        from infra.models.resolve import resolve_stt
+        _stt_repo = resolve_stt("preferred")
+    except Exception:
+        _stt_repo = "mlx-community/whisper-large-v3-turbo"
+
     script = (
         'import mlx_whisper, json; '
         f'r = mlx_whisper.transcribe("{wav_path}", '
-        'path_or_hf_repo="mlx-community/whisper-large-v3-turbo", '
+        f'path_or_hf_repo="{_stt_repo}", '
         'initial_prompt="\\u0628\\u0633\\u0645 \\u0627\\u0644\\u0644\\u0647 \\u0627\\u0644\\u0631\\u062d\\u0645\\u0646 \\u0627\\u0644\\u0631\\u062d\\u064a\\u0645. Hello, \\u0645\\u0631\\u062d\\u0628\\u0627."); '
         'print(json.dumps({"text": r.get("text", ""), "language": r.get("language", "unknown")}))'
     )
