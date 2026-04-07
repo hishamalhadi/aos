@@ -843,3 +843,88 @@ async def get_session(session_id: str, request: Request) -> JSONResponse:
         "spec": session["spec"],
         "phase": session["phase"],
     })
+
+
+# ---------------------------------------------------------------------------
+# Test Run — execute a spec's workflow without deploying
+# ---------------------------------------------------------------------------
+
+@router.post("/test-run")
+async def test_run(request: Request):
+    """Build a spec into workflow nodes, execute them, and stream results as SSE."""
+    body = await request.json()
+    spec = body.get("spec")
+    if not spec:
+        return JSONResponse({"error": "spec required"}, status_code=400)
+
+    async def generate() -> AsyncGenerator[str, None]:
+        try:
+            # Build the spec into n8n workflow JSON
+            yield f"event: status\ndata: {json.dumps({'status': 'Building workflow...'})}\n\n"
+
+            sys.path.insert(0, str(AOS_HOME / "core"))
+            from automations.builder import FlowBuilder
+            builder = FlowBuilder()
+            workflows = builder.build(spec)
+
+            if not workflows:
+                yield f"event: error\ndata: {json.dumps({'error': 'Build produced no workflows'})}\n\n"
+                return
+
+            # Use the first workflow's nodes
+            wf = workflows[0]
+            nodes = wf.get("nodes", [])
+
+            yield f"event: status\ndata: {json.dumps({'status': f'Executing {len(nodes)} nodes...'})}\n\n"
+
+            # Stream node-by-node execution using the modular executor
+            from qareen.api.automations import _match_executor
+            node_outputs: dict = {}
+            node_results = []
+
+            for i, node in enumerate(nodes):
+                node_name = node.get("name", "Unknown")
+                node_type = node.get("type", "")
+                start_time = datetime.utcnow()
+
+                yield f"event: node_start\ndata: {json.dumps({'node': node_name, 'index': i, 'total': len(nodes)})}\n\n"
+
+                executor, is_real = _match_executor(node_type)
+                try:
+                    items = await executor(node, node_outputs)
+                    node_outputs[node_name] = items
+                    dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                    result = {
+                        "node": node_name,
+                        "status": "success",
+                        "duration_ms": dur,
+                        "items": len(items) if isinstance(items, list) else 1,
+                        "error": None,
+                        "simulated": not is_real,
+                    }
+                except Exception as e:
+                    dur = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                    result = {
+                        "node": node_name,
+                        "status": "error",
+                        "duration_ms": dur,
+                        "items": 0,
+                        "error": str(e)[:200],
+                        "simulated": False,
+                    }
+
+                node_results.append(result)
+                yield f"event: node_complete\ndata: {json.dumps(result)}\n\n"
+
+                if result["status"] == "error":
+                    break
+
+            # Final summary
+            overall = "error" if any(r["status"] == "error" for r in node_results) else "success"
+            yield f"event: done\ndata: {json.dumps({'status': overall, 'node_results': node_results})}\n\n"
+
+        except Exception as e:
+            logger.exception("Test run failed")
+            yield f"event: error\ndata: {json.dumps({'error': str(e)[:200]})}\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
