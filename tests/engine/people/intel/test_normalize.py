@@ -5,8 +5,44 @@ values into this file — those live only in the operator's own people.db.
 """
 from core.engine.people.intel.normalize import (
     NormalizedName,
+    component_variants,
     normalize_canonical_name,
 )
+
+
+# ── component_variants ───────────────────────────────────────────────
+
+
+def test_component_variants_empty():
+    assert component_variants("") == []
+
+
+def test_component_variants_both_qualify():
+    assert component_variants("Alex Kumar") == ["alex", "kumar"]
+
+
+def test_component_variants_both_too_short():
+    # Both tokens are < 4 chars → empty list.
+    assert component_variants("Bo Sam") == []
+
+
+def test_component_variants_three_tokens():
+    assert component_variants("Alice Jane Kumar") == ["alice", "jane", "kumar"]
+
+
+def test_component_variants_dedup_preserves_order():
+    # Duplicate token dropped, order preserved.
+    assert component_variants("John John Smith") == ["john", "smith"]
+
+
+def test_component_variants_lowercased():
+    out = component_variants("ALICE Kumar")
+    assert out == ["alice", "kumar"]
+
+
+def test_component_variants_custom_min_length():
+    # min_length=3 should accept 3-char tokens like "Bob".
+    assert component_variants("Bob Smith", min_length=3) == ["bob", "smith"]
 
 
 # ── Primitives ────────────────────────────────────────────────────────

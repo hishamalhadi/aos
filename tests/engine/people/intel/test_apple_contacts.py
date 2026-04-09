@@ -400,6 +400,145 @@ def test_extract_returns_dict(fixture_db, person_index_all):
         assert signals.person_id == pid
 
 
+# ── ZBIRTHDAYYEARLESS second-pass tests ─────────────────────────────
+
+
+def _build_db_with_yearless(
+    path: Path,
+    *,
+    include_yearless: bool = True,
+    include_year_aware: bool = True,
+) -> None:
+    """Build a fixture where ZBIRTHDAYYEARLESS column is present.
+
+    Controls whether each row gets a year-aware ZBIRTHDAY, a yearless
+    birthday, both, or a year-aware-but-out-of-range timestamp.
+    """
+    conn = sqlite3.connect(str(path))
+    c = conn.cursor()
+
+    cols = [
+        "Z_PK INTEGER PRIMARY KEY",
+        "ZFIRSTNAME TEXT",
+        "ZLASTNAME TEXT",
+        "ZORGANIZATION TEXT",
+        "ZJOBTITLE TEXT",
+        "ZNOTE INTEGER",
+        "ZBIRTHDAY REAL",
+        "ZCREATIONDATE REAL",
+    ]
+    if include_yearless:
+        cols.append("ZBIRTHDAYYEARLESS REAL")
+    c.execute(f"CREATE TABLE ZABCDRECORD ({', '.join(cols)})")
+    c.execute(
+        """CREATE TABLE ZABCDNOTE (
+            Z_PK INTEGER PRIMARY KEY,
+            ZCONTACT INTEGER,
+            ZTEXT TEXT
+        )"""
+    )
+
+    # Records:
+    #  1 = Dana Only-Yearless (only ZBIRTHDAYYEARLESS populated)
+    #  2 = Eli Both (both columns populated → year-aware wins)
+    #  3 = Finn OutOfRange + Yearless (ZBIRTHDAY year < 1900, yearless falls back)
+    rows = []
+    # Core Data ts for yearless values (year doesn't matter — we emit --MM-DD).
+    march_07 = _core_data_ts(2000, 3, 7)  # → "--03-07"
+    june_21 = _core_data_ts(2000, 6, 21)  # → "--06-21"
+    oct_11 = _core_data_ts(2000, 10, 11)  # → "--10-11"
+
+    eli_birthday = _core_data_ts(1985, 7, 4)  # → "1985-07-04"
+
+    # Out-of-range: year 1800, rejected by year-range check.
+    finn_old_ts = datetime(1800, 1, 1, tzinfo=timezone.utc).timestamp() - APPLE_EPOCH_OFFSET
+
+    def _mkrow(pk, first, last, birthday, yearless):
+        if include_yearless:
+            return (pk, first, last, None, None, 0, birthday, None, yearless)
+        return (pk, first, last, None, None, 0, birthday, None)
+
+    if include_year_aware:
+        rows.append(_mkrow(1, "Dana", "Yearless", None, march_07))
+        rows.append(_mkrow(2, "Eli", "Both", eli_birthday, june_21))
+        rows.append(_mkrow(3, "Finn", "Old", finn_old_ts, oct_11))
+    else:
+        rows.append(_mkrow(1, "Dana", "Yearless", None, march_07))
+
+    placeholders = ",".join("?" * len(rows[0]))
+    colnames = ",".join(
+        [
+            "Z_PK",
+            "ZFIRSTNAME",
+            "ZLASTNAME",
+            "ZORGANIZATION",
+            "ZJOBTITLE",
+            "ZNOTE",
+            "ZBIRTHDAY",
+            "ZCREATIONDATE",
+        ]
+        + (["ZBIRTHDAYYEARLESS"] if include_yearless else [])
+    )
+    c.executemany(
+        f"INSERT INTO ZABCDRECORD ({colnames}) VALUES ({placeholders})",
+        rows,
+    )
+
+    conn.commit()
+    conn.close()
+
+
+def test_yearless_only_renders_mm_dd(tmp_path):
+    db = tmp_path / "AddressBook-v22.abcddb"
+    _build_db_with_yearless(db)
+    adapter = AppleContactsAdapter(db_path=str(db))
+    idx = {"p_dana": {"name": "Dana Yearless", "phones": [], "emails": [], "wa_jids": []}}
+    results = adapter.extract_all(idx)
+    assert "p_dana" in results
+    meta = results["p_dana"].metadata[0]
+    assert meta.has_birthday is True
+    assert meta.birthday == "--03-07"
+
+
+def test_year_aware_wins_when_both_present(tmp_path):
+    db = tmp_path / "AddressBook-v22.abcddb"
+    _build_db_with_yearless(db)
+    adapter = AppleContactsAdapter(db_path=str(db))
+    idx = {"p_eli": {"name": "Eli Both", "phones": [], "emails": [], "wa_jids": []}}
+    results = adapter.extract_all(idx)
+    assert "p_eli" in results
+    meta = results["p_eli"].metadata[0]
+    assert meta.has_birthday is True
+    # Year-aware ZBIRTHDAY takes precedence.
+    assert meta.birthday == "1985-07-04"
+
+
+def test_yearless_fallback_when_year_out_of_range(tmp_path):
+    db = tmp_path / "AddressBook-v22.abcddb"
+    _build_db_with_yearless(db)
+    adapter = AppleContactsAdapter(db_path=str(db))
+    idx = {"p_finn": {"name": "Finn Old", "phones": [], "emails": [], "wa_jids": []}}
+    results = adapter.extract_all(idx)
+    assert "p_finn" in results
+    meta = results["p_finn"].metadata[0]
+    # ZBIRTHDAY year is 1800 — rejected by range check. Yearless wins.
+    assert meta.has_birthday is True
+    assert meta.birthday == "--10-11"
+
+
+def test_yearless_column_missing_is_graceful(tmp_path):
+    db = tmp_path / "AddressBook-v22.abcddb"
+    _build_db_with_yearless(db, include_yearless=False)
+    adapter = AppleContactsAdapter(db_path=str(db))
+    idx = {"p_dana": {"name": "Dana Yearless", "phones": [], "emails": [], "wa_jids": []}}
+    # Adapter must not crash, just no birthday for Dana.
+    results = adapter.extract_all(idx)
+    assert "p_dana" in results
+    meta = results["p_dana"].metadata[0]
+    assert meta.has_birthday is False
+    assert meta.birthday is None
+
+
 def test_unmatched_person_absent(fixture_db):
     adapter = AppleContactsAdapter(db_path=str(fixture_db))
     idx = {
