@@ -35,8 +35,23 @@ def extract_metadata_only(url: str) -> ExtractionResult | None:
         print(f"No handler for platform: {platform}", file=sys.stderr)
         return None
 
-    print(f"Extracting metadata: {platform} / {content_id}")
+    print(f"Extracting metadata: {platform} / {content_id}", file=sys.stderr)
     result = handler.extract_metadata(url, content_id, content_type)
+    result.add_stage("metadata", source="yt-dlp", platform=platform)
+
+    # Link extraction (cheap — always run)
+    try:
+        from links import extract_and_categorize
+        result.links = extract_and_categorize(result.description or "")
+        if result.links.get("total", 0) > 0:
+            result.add_stage("links",
+                             total=result.links["total"],
+                             github=len(result.links.get("github", [])),
+                             videos=len(result.links.get("video", [])),
+                             articles=len(result.links.get("article", [])))
+    except Exception as e:
+        result.add_stage("links", status="failed", error=str(e))
+
     return result
 
 
@@ -79,10 +94,29 @@ def extract(url: str, save_to_vault: bool = False, vault_dir: str | None = None,
     # Step 1: Extract metadata
     print(f"[{platform}] Extracting metadata for {content_id}...")
     result = handler.extract_metadata(url, content_id, content_type)
+    result.add_stage("metadata", source="yt-dlp", platform=platform)
 
     # Attach source context if provided
     if source_context:
         result.source_context = source_context
+
+    # Step 1.5: Extract and categorize links from description
+    try:
+        from links import extract_and_categorize
+        result.links = extract_and_categorize(result.description or "")
+        if result.links.get("total", 0) > 0:
+            print(f"  Found {result.links['total']} links in description "
+                  f"({len(result.links.get('github', []))} repos, "
+                  f"{len(result.links.get('video', []))} videos, "
+                  f"{len(result.links.get('article', []))} articles)")
+            result.add_stage("links",
+                             total=result.links["total"],
+                             github=len(result.links.get("github", [])),
+                             videos=len(result.links.get("video", [])),
+                             articles=len(result.links.get("article", [])))
+    except Exception as e:
+        print(f"  Link extraction failed: {e}", file=sys.stderr)
+        result.add_stage("links", status="failed", error=str(e))
 
     # Step 2: Fetch comments (YouTube only, deep extraction only)
     if platform == "youtube" and not skip_transcript:
@@ -92,6 +126,7 @@ def extract(url: str, save_to_vault: bool = False, vault_dir: str | None = None,
             result.comments = handler.fetch_comments(url)
             if result.comments:
                 print(f"  Got {len(result.comments)} comments")
+                result.add_stage("comments", count=len(result.comments))
 
     # Step 3: Transcribe (if content has audio and transcription not skipped)
     if not skip_transcript and result.has_audio:
@@ -103,8 +138,10 @@ def extract(url: str, save_to_vault: bool = False, vault_dir: str | None = None,
         result.transcript_source = source
         if transcript:
             print(f"  Transcribed {len(transcript)} chars via {source}")
+            result.add_stage("transcript", source=source, chars=len(transcript))
         else:
             print("  No transcript available", file=sys.stderr)
+            result.add_stage("transcript", status="failed", source="none")
 
     # Step 4: OCR on-screen text (if video content and deep extraction)
     if not skip_transcript and not skip_ocr and result.has_audio and not result.needs_fallback:
@@ -114,12 +151,16 @@ def extract(url: str, save_to_vault: bool = False, vault_dir: str | None = None,
             result.ocr_text = extract_ocr_text(url)
             if result.ocr_text:
                 print(f"  OCR found text in {len(result.ocr_text)} frames")
+                result.add_stage("ocr", frames_with_text=len(result.ocr_text))
             else:
                 print("  No on-screen text detected")
+                result.add_stage("ocr", frames_with_text=0)
         except ImportError:
             print("  OCR not available (surya-ocr not installed)", file=sys.stderr)
+            result.add_stage("ocr", status="skipped", reason="surya-ocr not installed")
         except Exception as e:
             print(f"  OCR failed: {e}", file=sys.stderr)
+            result.add_stage("ocr", status="failed", error=str(e))
 
     # Step 5: Save to vault
     if save_to_vault:

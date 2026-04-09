@@ -39,12 +39,13 @@ YouTube captions (free, instant)
 
 Before extracting anything, determine what the user actually needs. This shapes everything — how much work to do, whether to save, and how to respond.
 
-| Intent | Signals | Extraction depth | Save to vault? |
-|--------|---------|-----------------|---------------|
-| **Quick question** | "what's this about?", "quickly tell me", "someone sent me this" | Metadata + transcript, summarize concisely | **No** — just answer |
-| **Research / deep dive** | "research this", "analyze", bare URL with no context, "extract" | Full extraction + analysis | **Yes** |
-| **Capture / archive** | `/capture`, "save this", "log this", "add to vault" | Full extraction | **Yes** |
-| **Transcribe** | "transcribe this", "what does this say exactly" | Full extraction, show transcript | **Yes** (for reference) |
+| Intent | Signals | Extraction depth | Visual depth | Save to vault? |
+|--------|---------|-----------------|-------------|---------------|
+| **Quick question** | "what's this about?", "quickly tell me", "someone sent me this" | Metadata + transcript, summarize concisely | Sample 6 sprite sheets, glance for context | **No** — just answer |
+| **Research / deep dive** | "research this", "analyze", bare URL with no context, "extract" | Full extraction + analysis | All sb0 sheets, full triage, hi-res flagged frames | **Yes** |
+| **Deep research** | "deep research", "deep dive", "study this thoroughly" | Full extraction + analysis + visual deep scan | All sb1 sheets (dense), full triage, hi-res on all flagged + OCR | **Yes** |
+| **Capture / archive** | `/capture`, "save this", "log this", "add to vault" | Full extraction | All sb0 sheets, triage | **Yes** |
+| **Transcribe** | "transcribe this", "what does this say exactly" | Full extraction, show transcript | None — audio only | **Yes** (for reference) |
 
 The key insight: not every link needs to be persisted. A casual "what's this reel about?" deserves a fast, direct answer — not a 2-minute extraction pipeline with vault save. Match your effort to the user's energy.
 
@@ -80,6 +81,161 @@ cd ~/aos/apps/content-engine && python3 cli.py "URL" --metadata-only
 ```bash
 cd ~/aos/apps/content-engine && python3 cli.py --batch urls.txt --vault
 ```
+
+### Step 3.25: Description Link Research
+
+Every extraction automatically runs link extraction from the description. The result is available in `result.links` with these categories: `github`, `paper`, `docs`, `tool`, `video`, `article`, `website`, `social`.
+
+**For quick questions**: Just mention key links ("he references X repo, Y paper") in your summary. Don't fetch anything.
+
+**For research / deep research**: Investigate the high-priority links before responding. This gives you context the transcript can't.
+
+Priority order (baked into `research_priority`):
+
+1. **GitHub repos** — clone and read. Most valuable: often the actual implementation being discussed.
+   ```bash
+   cd /tmp && git clone --depth 1 https://github.com/owner/repo.git
+   ```
+   Then read: `README.md`, directory structure, key source files, any `COMPARISON.md` / `ARCHITECTURE.md` / `SPEC.md` files.
+
+2. **Papers** (arxiv, etc.) — fetch with WebFetch, read abstract + conclusions.
+
+3. **Docs** — fetch specific pages the video references.
+
+4. **Tools/products** — visit homepage to understand the capability being demo'd.
+
+5. **Related videos** — note them, but don't extract recursively unless explicitly asked (that's a rabbit hole).
+
+6. **Articles** — fetch with WebFetch for context.
+
+When investigating links, write findings back into `result.link_research` so they appear in the vault note:
+```json
+{
+  "url": "https://github.com/owner/repo",
+  "summary": "Open-source Pi agent playground with 16 extensions covering agent teams, damage control, tilldone discipline, etc. Key files: extensions/agent-team.ts, .pi/agents/teams.yaml"
+}
+```
+
+### Step 3.5: Visual Triage (YouTube only)
+
+YouTube videos have pre-generated storyboard sprites — thumbnail grids used for the scrubber bar. These are free, instant, and cover the entire video (~1MB for a 30-minute video). Use them to understand what's visually on screen without downloading the full video.
+
+**Skip this step for:** non-YouTube platforms, transcribe-only intent, or videos under 30 seconds.
+
+#### How it works
+
+**Phase 1 — Fetch sprites:**
+
+Choose the CLI flags based on intent:
+
+| Intent | CLI command |
+|--------|------------|
+| Quick question | `python3 cli.py "URL" --storyboard --storyboard-sample 6` |
+| Research | `python3 cli.py "URL" --storyboard` |
+| Deep research | `python3 cli.py "URL" --storyboard --storyboard-tier sb1` |
+| Capture | `python3 cli.py "URL" --storyboard --storyboard-sample 8` |
+
+The CLI outputs JSON with sprite sheet paths. Each sprite sheet is a JPEG grid of frames (e.g., 3x3 at 320x180 per frame for sb0).
+
+**Phase 1.5 — Transcript alignment (NEW, highly recommended for research):**
+
+Instead of manually scanning the transcript to find what was said at each frame's timestamp, use the alignment helper:
+
+```bash
+python3 cli.py "URL" --align-transcript --storyboard-tier sb0
+```
+
+This outputs a JSON table where each entry maps a frame timestamp to:
+- `spoken` — transcript text within ±5s of the frame
+- `context_before` / `context_after` — broader context (±10s)
+- `chapter` — which video chapter this frame belongs to
+- `is_chapter_boundary` — whether this frame is near a chapter cut (±15s)
+
+**This is what makes "shown but not said" detection efficient.** For each frame, you can immediately see what the speaker was saying. If the visual shows code but the `spoken` field says "and you can see here" without describing the code, that frame is a shown-but-not-said candidate.
+
+**Phase 2 — Visual triage (you are the VLM):**
+
+Read the sprite sheet images using the Read tool. You can see them — you're multimodal. For each sprite sheet, classify what you see in each cell of the grid:
+
+- `talking_head` — person speaking to camera, no visual aids
+- `code_on_screen` — code editor, terminal, IDE, command output visible
+- `slide` — presentation slide, diagram, flowchart, architecture drawing
+- `website` — browser showing a webpage
+- `title_card` — intro/outro title, text overlay on black/styled background
+- `screen_recording` — screen share of any software (not just code)
+- `b_roll` — transition footage, stock video, no information content
+
+For **quick questions**: just glance at the sprite sheets. Note whether the video is mostly talking head (transcript sufficient) or has significant visual content (mention it in your summary). Don't do formal classification.
+
+For **research / deep research**: classify every sprite sheet. Build a mental map of the video's visual structure. Identify timestamps where readable content appears (code, slides, websites). These are the frames worth extracting at higher resolution.
+
+**The "shown but not said" rule — MOST IMPORTANT:**
+
+Cross-reference the sprite sheets against the transcript. Flag any frame where the visual content conveys information the speaker does NOT verbalize. These are the highest-value frames to extract.
+
+Signals that something is "shown but not said":
+- Speaker says "here's my config" or "check this out" but doesn't read the content
+- Speaker says "as you can see" and moves on without describing what's on screen
+- Speaker describes high-level concepts while the screen shows concrete implementation details
+- Code/YAML/JSON is visible but only vaguely referenced ("my agent definition")
+- Diagrams, architectures, or flow charts appear but the speaker only summarizes them verbally
+- Terminal outputs, error messages, or command results shown briefly without being read aloud
+- UI walkthroughs where the visual IS the information (menu items, button labels, layouts)
+
+These are the moments where the transcript alone will fail you. The hi-res extraction at Step 3.5 Phase 3 should **prioritize these "shown but not said" timestamps above all others**.
+
+Think of it this way: if removing the video and keeping only the audio would lose information at timestamp X, then frame X must be extracted at hi-res.
+
+**Phase 3 — Surgical hi-res extraction (research/deep research only):**
+
+If you identified frames with readable content (code, slides, diagrams), extract them at full resolution:
+
+```bash
+cd ~/aos/apps/content-engine && python3 cli.py "URL" --hires-frames "120.0,340.5,780.0" --storyboard-out /tmp/ce-visual-{content_id}/hires
+```
+
+Then read the hi-res frames with the Read tool. Now you can actually read the code, the slide text, the website content. Include these findings in your analysis.
+
+**Phase 4 — Merge visual data into vault note:**
+
+Use the merge-only mode to update an existing vault note **without re-running extraction**. First write your triage to a temp file, then merge:
+
+```bash
+# Write triage data to a temp file (avoids shell escaping issues)
+cat > /tmp/triage-{content_id}.json << 'EOF'
+{
+  "summary": "Video alternates between talking head and live coding. Key visual content at 4:30 (agent config), 12:00 (orchestrator prompt), 22:00 (Pi agent team dashboard).",
+  "flags": ["has_code", "has_screen_recording", "has_website"],
+  "triage": [
+    {"timestamp": 270, "classification": "code_on_screen", "has_readable_content": true, "description": "Claude Code terminal showing agent configuration"},
+    {"timestamp": 720, "classification": "code_on_screen", "has_readable_content": true, "description": "Orchestrator prompt engineering"}
+  ],
+  "hires_frames": [
+    {"timestamp": 270, "analysis": "Shows agent config with tool permissions and model selection"}
+  ]
+}
+EOF
+
+# Merge into existing vault note (found via $VAULT_PATH from step 3)
+python3 cli.py "URL" --update-vault /path/to/vault/note.md --visual-triage-file /tmp/triage-{content_id}.json
+```
+
+The `--update-vault` mode:
+- Reads the existing vault note
+- Generates the Visual Analysis section from your triage JSON
+- Replaces any existing Visual Analysis section (idempotent) OR inserts before Top Comments
+- Writes back atomically
+- **Does not re-run metadata extraction or transcription** — fast, no API calls
+
+**Alternative (for initial extraction):** `--visual-triage-file` can also be passed to the full extraction flow, which re-saves the vault note with visual data included. Use this only if you don't have an existing vault note yet.
+
+#### Decision tree: does this video need visual extraction?
+
+After Phase 2 triage, decide:
+
+- **100% talking head / b_roll** → Transcript is sufficient. Skip Phase 3. Mention in response: "This is a talking-head video — transcript captures the full content."
+- **Mixed (some code/slides)** → Extract hi-res only for the informative frames. Merge visual + transcript.
+- **Mostly screen content** → This video's value is in what's on screen. Extract extensively. The transcript alone would miss critical information.
 
 ### Step 4: Respond based on intent
 
