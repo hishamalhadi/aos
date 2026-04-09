@@ -565,6 +565,57 @@ def cmd_nudges_list(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_compile_profile(args: argparse.Namespace) -> int:
+    """Compile a single person profile and write to vault + profile_versions."""
+    from core.engine.people import profile as profile_mod
+
+    conn = profile_mod.open_combined()
+    try:
+        prof = profile_mod.compile_profile(args.person_id, conn=conn)
+        if prof is None:
+            print(f"error: person {args.person_id} not found", file=sys.stderr)
+            return 1
+
+        if args.json:
+            import json as _json
+            print(_json.dumps(prof.to_dict(), indent=2, default=str))
+            return 0
+
+        if args.print_only:
+            print(profile_mod.render_markdown(prof))
+            return 0
+
+        vault_path = profile_mod.persist(
+            prof, conn,
+            write_vault=not args.no_vault,
+            trigger="cli",
+        )
+        print(f"✓ Compiled profile for {prof.basics.get('canonical_name')} ({args.person_id})")
+        if vault_path:
+            print(f"  vault: {vault_path}")
+        return 0
+    finally:
+        conn.close()
+
+
+def cmd_compile_profiles(args: argparse.Namespace) -> int:
+    """Bulk-compile profiles by tier or importance filter."""
+    from core.engine.people import profile as profile_mod
+
+    only_tiers = args.tier.split(",") if args.tier else None
+    counts = profile_mod.compile_all(
+        only_tiers=only_tiers,
+        only_importance_at_most=args.importance_at_most,
+        write_vault=not args.no_vault,
+        trigger="cli-bulk",
+    )
+
+    _print_header("Profile compiler — bulk run")
+    for k, v in counts.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
 def cmd_nudge_done(args: argparse.Namespace) -> int:
     """Mark a nudge as actioned by id."""
     from . import nudges as nudges_mod
@@ -722,6 +773,32 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("nudge-done", help="Mark a nudge as actioned")
     sp.add_argument("nudge_id", help="Nudge ID (e.g. iq_abc12345)")
     sp.set_defaults(func=cmd_nudge_done)
+
+    # compile-profile <person_id>
+    sp = sub.add_parser(
+        "compile-profile",
+        help="Compile a deterministic profile for one person + write to vault",
+    )
+    sp.add_argument("person_id")
+    sp.add_argument("--print-only", action="store_true",
+                    help="Print markdown to stdout, don't persist")
+    sp.add_argument("--json", action="store_true",
+                    help="Print full profile dict as JSON")
+    sp.add_argument("--no-vault", action="store_true",
+                    help="Skip vault file write (still writes profile_versions)")
+    sp.set_defaults(func=cmd_compile_profile)
+
+    # compile-profiles  (bulk)
+    sp = sub.add_parser(
+        "compile-profiles",
+        help="Bulk-compile profiles by tier / importance filter",
+    )
+    sp.add_argument("--tier", default=None,
+                    help="Comma-sep tier filter (e.g. 'core,active,emerging')")
+    sp.add_argument("--importance-at-most", type=int, default=None,
+                    help="Filter to people.importance <= N")
+    sp.add_argument("--no-vault", action="store_true")
+    sp.set_defaults(func=cmd_compile_profiles)
 
     return parser
 

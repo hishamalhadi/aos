@@ -41,6 +41,7 @@ run_step() {
 run_step "extract"          "$PYTHON" -m core.engine.people.intel.cli extract
 run_step "classify"         "$PYTHON" -m core.engine.people.intel.cli classify
 run_step "nudges-generate"  "$PYTHON" -m core.engine.people.intel.cli nudges-generate
+run_step "compile-profiles" "$PYTHON" -m core.engine.people.intel.cli compile-profiles --tier core,active,emerging
 
 echo "[$(ts)] people-intel-refresh done — $successes ok, $failures failed"
 
