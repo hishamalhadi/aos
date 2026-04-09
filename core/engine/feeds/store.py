@@ -60,19 +60,19 @@ def store_item(db_path: str | Path | None, item: dict) -> bool:
             """,
             (
                 brief_id,
-                item.get("source_id", ""),
+                item.get("source_id") or "",
                 now,
-                item.get("layer", 5),
-                item.get("category", "news"),
-                item.get("platform", ""),
-                item.get("title", "Untitled"),
-                item.get("summary", ""),
-                item.get("content", ""),
+                item.get("layer") or 5,
+                item.get("category") or "news",
+                item.get("platform") or "",
+                item.get("title") or "Untitled",
+                item.get("summary") or "",
+                item.get("content") or "",
                 url or None,
-                item.get("author", ""),
+                item.get("author") or "",
                 raw_data,
                 key_findings,
-                item.get("relevance_score", 0.0),
+                item.get("relevance_score") or 0.0,
                 relevance_tags,
                 item.get("published_at"),
                 item.get("project_id"),
@@ -97,11 +97,15 @@ def store_item(db_path: str | Path | None, item: dict) -> bool:
         conn.commit()
         return True
 
-    except sqlite3.IntegrityError:
+    except sqlite3.IntegrityError as e:
         # URL uniqueness constraint or other integrity error
+        print(f"[store] IntegrityError for {item.get('url','?')[:60]}: {e}")
         return False
     except sqlite3.OperationalError as e:
-        print(f"[store] DB error: {e}")
+        print(f"[store] OperationalError: {e}")
+        return False
+    except Exception as e:
+        print(f"[store] Unexpected {type(e).__name__}: {e}")
         return False
     finally:
         conn.close()
