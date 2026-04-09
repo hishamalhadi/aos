@@ -357,7 +357,10 @@ def scan_messages(
                 "channel": "whatsapp",
                 "direction": direction,
                 "sender_id": sender_jid,
-                "recipient_id": chat_jid if not from_me else None,
+                # For outbound, the recipient is the conversation partner
+                # (1:1 chat: their JID; group: the group JID). Preserving
+                # this is what lets the resolver attach person_id later.
+                "recipient_id": chat_jid,
                 "content": text,
                 "timestamp": ts.isoformat(),
                 "has_attachment": has_attachment,
@@ -564,11 +567,15 @@ def ingest(
         # guarantee re-runs are idempotent.
         batch = []
         for m in messages:
-            person_id = (
-                jid_to_person.get(m["_sender_jid"])
-                if m["_sender_jid"] != "me"
-                else None
-            )
+            if m["_sender_jid"] != "me":
+                # Inbound: resolve via the actual sender JID
+                person_id = jid_to_person.get(m["_sender_jid"])
+            elif not m["_is_group"]:
+                # Outbound 1:1: the partner is the chat JID
+                person_id = jid_to_person.get(m["_chat_jid"])
+            else:
+                # Outbound to a group — no single person on the other end
+                person_id = None
             batch.append(
                 (
                     m["id"],

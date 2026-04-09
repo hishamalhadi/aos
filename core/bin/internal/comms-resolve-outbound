@@ -1,0 +1,176 @@
+#!/usr/bin/env python3
+"""
+Backfill recipient_id and person_id for outbound WhatsApp messages.
+
+The pre-fix `whatsapp_desktop.py` ingested outbound rows with
+recipient_id = NULL, breaking person resolution. The JID is still
+recoverable from `channel_metadata.jid`. This script:
+
+  1. UPDATEs recipient_id = channel_metadata->>jid for outbound rows
+     where it's currently empty or NULL.
+  2. Re-runs the same two-pass JID→person resolution the live ingester
+     uses (direct wa_jid match + phone fallback) and writes person_id.
+
+Idempotent: safe to re-run. Reports counts. --dry-run shows what would
+change without writing.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sqlite3
+import sys
+from pathlib import Path
+
+COMMS_DB = Path.home() / ".aos" / "data" / "comms.db"
+PEOPLE_DB = Path.home() / ".aos" / "data" / "people.db"
+
+# Mirror _normalize_phone_from_jid in core/qareen/channels/whatsapp_desktop.py
+def _phone_from_jid(jid: str) -> str | None:
+    if not jid or "@g.us" in jid or "@" not in jid:
+        return None
+    digits = re.sub(r"\D", "", jid.split("@", 1)[0])
+    return f"+{digits}" if digits else None
+
+
+def build_jid_person_map(jids: set[str], people_conn: sqlite3.Connection) -> dict[str, str]:
+    """Two-pass: direct wa_jid match, then phone fallback."""
+    mapping: dict[str, str] = {}
+    if not jids:
+        return mapping
+
+    jid_list = [j for j in jids if j and "@" in j]
+    CHUNK = 500
+
+    # Pass 1: direct wa_jid match
+    for i in range(0, len(jid_list), CHUNK):
+        chunk = jid_list[i : i + CHUNK]
+        placeholders = ",".join("?" * len(chunk))
+        rows = people_conn.execute(
+            f"SELECT value, person_id FROM person_identifiers "
+            f"WHERE type='wa_jid' AND value IN ({placeholders})",
+            tuple(chunk),
+        ).fetchall()
+        for value, person_id in rows:
+            mapping[value] = person_id
+
+    # Pass 2: phone fallback for unresolved 1:1 JIDs
+    unresolved = [j for j in jid_list if j not in mapping and "@g.us" not in j]
+    phone_to_jid: dict[str, str] = {}
+    for jid in unresolved:
+        phone = _phone_from_jid(jid)
+        if phone:
+            phone_to_jid[phone] = jid
+
+    if phone_to_jid:
+        phones = list(phone_to_jid.keys())
+        for i in range(0, len(phones), CHUNK):
+            chunk = phones[i : i + CHUNK]
+            placeholders = ",".join("?" * len(chunk))
+            rows = people_conn.execute(
+                f"SELECT normalized, person_id FROM person_identifiers "
+                f"WHERE type='phone' AND normalized IN ({placeholders})",
+                tuple(chunk),
+            ).fetchall()
+            for normalized, person_id in rows:
+                jid = phone_to_jid.get(normalized)
+                if jid and jid not in mapping:
+                    mapping[jid] = person_id
+
+    return mapping
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Backfill outbound recipient_id + person_id in comms.db")
+    parser.add_argument("--dry-run", action="store_true", help="Show counts without writing")
+    args = parser.parse_args()
+
+    if not COMMS_DB.exists():
+        sys.exit(f"error: {COMMS_DB} not found")
+    if not PEOPLE_DB.exists():
+        sys.exit(f"error: {PEOPLE_DB} not found")
+
+    conn = sqlite3.connect(str(COMMS_DB))
+    conn.row_factory = sqlite3.Row
+
+    # Step 1: find outbound rows missing recipient_id
+    rows = conn.execute(
+        """
+        SELECT id, channel_metadata
+        FROM messages
+        WHERE channel = 'whatsapp'
+          AND direction = 'outbound'
+          AND (recipient_id IS NULL OR recipient_id = '')
+        """
+    ).fetchall()
+
+    print(f"=== comms-resolve-outbound ({COMMS_DB}) ===\n")
+    print(f"Outbound rows missing recipient_id: {len(rows)}")
+
+    extracted: list[tuple[str, str]] = []  # (msg_id, jid)
+    no_jid = 0
+    for row in rows:
+        try:
+            meta = json.loads(row["channel_metadata"]) if row["channel_metadata"] else {}
+            jid = meta.get("jid", "")
+        except json.JSONDecodeError:
+            jid = ""
+        if jid:
+            extracted.append((row["id"], jid))
+        else:
+            no_jid += 1
+
+    print(f"  recoverable from channel_metadata.jid: {len(extracted)}")
+    print(f"  missing jid (cannot recover): {no_jid}\n")
+
+    if not extracted:
+        print("Nothing to do.")
+        return 0
+
+    # Step 2: resolve JIDs to person_ids
+    unique_jids = {jid for _, jid in extracted}
+    print(f"Unique JIDs to resolve: {len(unique_jids)}")
+
+    people_conn = sqlite3.connect(str(PEOPLE_DB))
+    try:
+        jid_to_person = build_jid_person_map(unique_jids, people_conn)
+    finally:
+        people_conn.close()
+
+    print(f"  resolved to person_id: {len(jid_to_person)}")
+    print(f"  unresolved (no person match): {len(unique_jids) - len(jid_to_person)}\n")
+
+    # Step 3: write
+    if args.dry_run:
+        print("Dry run — no writes. Re-run without --dry-run to apply.")
+        conn.close()
+        return 0
+
+    updated_recipient = 0
+    updated_person = 0
+    for msg_id, jid in extracted:
+        pid = jid_to_person.get(jid)
+        if pid:
+            conn.execute(
+                "UPDATE messages SET recipient_id = ?, person_id = ? WHERE id = ?",
+                (jid, pid, msg_id),
+            )
+            updated_person += 1
+        else:
+            conn.execute(
+                "UPDATE messages SET recipient_id = ? WHERE id = ?",
+                (jid, msg_id),
+            )
+        updated_recipient += 1
+
+    conn.commit()
+    conn.close()
+
+    print(f"✓ recipient_id set on {updated_recipient} rows")
+    print(f"✓ person_id set on {updated_person} rows")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
