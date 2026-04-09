@@ -153,7 +153,7 @@ pub fn run() {
                 .fullscreen()
                 .build()?;
 
-            let screen_1 = MenuItemBuilder::with_id("go_screen_1", "Dashboard")
+            let screen_1 = MenuItemBuilder::with_id("go_screen_1", "Qareen")
                 .accelerator("CmdOrCtrl+1")
                 .build(app)?;
             let screen_2 = MenuItemBuilder::with_id("go_screen_2", "Tasks")

@@ -16,9 +16,6 @@ import httpx
 from stt import SpeechToText
 from tts import TextToSpeech
 
-DASHBOARD_URL = "http://127.0.0.1:4096"
-
-
 class MeetingState(str, Enum):
     SETUP = "setup"
     ACTIVE = "active"

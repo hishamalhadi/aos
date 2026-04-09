@@ -244,7 +244,7 @@ Step-by-step uses two complementary tracking systems:
 | Layer | Tool | Purpose |
 |-------|------|---------|
 | **In-session** | `TaskCreate` / `TaskUpdate` | Visual progress in Claude Code UI — spinners, checkmarks, status |
-| **Persistent** | Work CLI (`~/aos/core/work/cli.py`) | Cross-session state, dashboard events, initiative linking |
+| **Persistent** | Work CLI (`~/aos/core/work/cli.py`) | Cross-session state, Qareen events, initiative linking |
 
 Both are mandatory. TaskCreate gives the operator live visual feedback. The work system gives resumability and downstream automation.
 
@@ -337,9 +337,9 @@ The work engine handles everything downstream:
 - Subtask marked done
 - When ALL subtasks done → parent auto-completes (cascade)
 - If parent has `source_ref` → initiative checkbox auto-updates
-- Dashboard gets a live event
+- Qareen gets a live event
 
-You do NOT need to manually update initiative docs, plan files, or dashboards. The engine does it.
+You do NOT need to manually update initiative docs, plan files, or Qareen. The engine does it.
 
 ### At POLISH
 

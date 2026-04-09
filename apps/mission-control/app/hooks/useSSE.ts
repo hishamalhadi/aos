@@ -7,7 +7,7 @@ import { useRealtimeStore } from '@/store/realtime';
 const SSE_URL = 'http://localhost:4096/api/stream';
 
 /**
- * Connects to the dashboard SSE stream and invalidates
+ * Connects to the Qareen SSE stream and invalidates
  * TanStack Query caches when relevant events arrive.
  *
  * Events from the stream:
@@ -24,7 +24,7 @@ export function useSSE() {
   const eventSourceRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
-    // SSE only works when the dashboard stream is available
+    // SSE only works when the Qareen stream is available
     // Silently degrade to polling if not
     if (typeof window === 'undefined') return;
 

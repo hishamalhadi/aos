@@ -26,7 +26,7 @@ import yaml
 
 _gh_log = logging.getLogger("work.github")
 
-DASHBOARD_URL = "http://127.0.0.1:4096"
+QAREEN_URL = "http://127.0.0.1:4096"
 AOS_REPO = "hishamalhadi/aos"  # GitHub repo for issue sync
 
 
@@ -577,25 +577,25 @@ def _log_activity(action: str, task_id: str = None, title: str = None,
             finally:
                 fcntl.flock(lf, fcntl.LOCK_UN)
 
-        # Push to dashboard SSE bus (fire-and-forget)
-        _notify_dashboard(event)
+        # Push to Qareen SSE bus (fire-and-forget)
+        _notify_qareen(event)
     except Exception:
         pass  # Activity log is best-effort
 
 
-def _notify_dashboard(event: dict) -> None:
-    """POST work event to dashboard for instant SSE push. Best-effort."""
+def _notify_qareen(event: dict) -> None:
+    """POST work event to Qareen for instant SSE push. Best-effort."""
     try:
         data = json.dumps(event).encode()
         req = urllib.request.Request(
-            f"{DASHBOARD_URL}/api/work/notify",
+            f"{QAREEN_URL}/api/work/notify",
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=1)
     except Exception:
-        pass  # Dashboard may not be running
+        pass  # Qareen may not be running
 
 
 def _sync_initiative_checkbox(task: dict) -> None:
@@ -661,7 +661,7 @@ def _sync_initiative_checkbox(task: dict) -> None:
 
 
 def notify_initiative_event(action: str, title: str, **kwargs) -> None:
-    """Send an initiative event to the dashboard SSE stream. Best-effort.
+    """Send an initiative event to the Qareen SSE stream. Best-effort.
 
     Actions: initiative_created, initiative_update, phase_completed,
              initiative_completed, gate_check
@@ -672,7 +672,7 @@ def notify_initiative_event(action: str, title: str, **kwargs) -> None:
         "ts": datetime.now().isoformat(),
     }
     event.update(kwargs)
-    _notify_dashboard(event)
+    _notify_qareen(event)
 
 
 def get_activity(limit: int = 30) -> list:
@@ -1807,7 +1807,7 @@ def migrate_task_ids() -> dict:
 # ── Bulk accessors ────────────────────────────────────
 
 def load_all() -> dict:
-    """Load all work data. Use for dashboards/reviews."""
+    """Load all work data. Use for Qareens/reviews."""
     return {
         "version": "3.0",
         "tasks": get_all_tasks(),

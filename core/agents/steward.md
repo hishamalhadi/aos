@@ -59,7 +59,7 @@ Monitor -> Detect -> Correct -> Report
 
 | Service | Port | Health check |
 |---------|------|-------------|
-| Dashboard | 4096 | `curl -s http://127.0.0.1:4096/health` |
+| Qareen | 4096 | `curl -s http://127.0.0.1:4096/api/health` |
 | Listen | 7600 | `curl -s http://127.0.0.1:7600/health` |
 | Bridge | daemon | `launchctl list \| grep com.aos.bridge` |
 | Memory | stdio | MCP server, check process |
@@ -92,7 +92,7 @@ If uptime < 10 minutes, the machine just rebooted. Check:
 
 1. **Are all LaunchAgents running?** If not, load them:
    ```bash
-   for la in com.aos.scheduler com.aos.bridge com.aos.dashboard com.aos.listen; do
+   for la in com.aos.scheduler com.aos.bridge com.aos.qareen com.aos.listen; do
        launchctl list | grep -q "$la" || launchctl load ~/Library/LaunchAgents/${la}.plist 2>/dev/null
    done
    ```

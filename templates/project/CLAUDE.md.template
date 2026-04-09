@@ -11,7 +11,7 @@ A project workspace within the AOS (Agentic Operating System).
 
 | Service | Port | Check |
 |---------|------|-------|
-| Dashboard | 4096 | `curl http://127.0.0.1:4096/health` |
+| Qareen | 4096 | `curl http://127.0.0.1:4096/health` |
 | Listen | 7600 | `curl http://127.0.0.1:7600/health` |
 | Bridge | daemon | `launchctl list \| grep agent` |
 

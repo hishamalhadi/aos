@@ -36,7 +36,7 @@ ps aux | grep "bridge.*main.py" | grep -v grep
 # Listen server
 curl -sf http://localhost:7600/jobs && echo "OK" || echo "DOWN"
 
-# Dashboard
+# Qareen
 curl -sf http://localhost:4096/api/health && echo "OK" || echo "DOWN"
 ```
 
@@ -115,7 +115,7 @@ grep "setMessageReaction" logs/bridge.err.log | tail -10
 | `core/services/bridge/telegram_formatter.py` | Markdown → Telegram HTML |
 | `core/services/bridge/interactive_buttons.py` | Inline keyboards (option detection, quick actions) |
 | `core/services/bridge/heartbeat.py` | 30-min health checks |
-| `core/services/bridge/activity_client.py` | Dashboard activity logging |
+| `core/services/bridge/activity_client.py` | Qareen activity logging |
 | `data/bridge/sessions.json` | Per-user Claude session IDs |
 | `~/Library/LaunchAgents/com.aos.bridge.plist` | LaunchAgent config |
 

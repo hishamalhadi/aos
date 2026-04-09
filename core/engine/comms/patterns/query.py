@@ -1,7 +1,7 @@
 """Pattern query helpers.
 
 Simple read-only functions for consumers (graduation engine, draft engine,
-dashboard) to access communication patterns and relationship state.
+Qareen) to access communication patterns and relationship state.
 
 Usage:
     from core.comms.patterns.query import get_pattern, get_top_contacts

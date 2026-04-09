@@ -8,7 +8,7 @@ description: >
   "it would be nice if", "feature request", "I wish", "/idea" for enhancement
   requests. Activate proactively when you notice AOS errors during normal work
   — but only for issues that are clearly AOS-related (services, skills, config,
-  crons, hooks, dashboard, bridge, work system), not external environment
+  crons, hooks, Qareen, bridge, work system), not external environment
   problems (network, disk, hardware).
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
@@ -33,7 +33,7 @@ Before investigating, determine whether this is something AOS can fix:
 |------------------------|----------------------------------|
 | Service crashing or not responding | WiFi/internet down |
 | Hook failing on session start | Disk full |
-| Dashboard showing wrong data | macOS system update broke something |
+| Qareen showing wrong data | macOS system update broke something |
 | Cron job not running | User confused about non-AOS tool |
 | Skill not triggering | Hardware failure |
 | Config in wrong location | External API down (not ours) |
@@ -47,7 +47,7 @@ Let me help you fix it directly."
 | Type | Label | Severity | Example |
 |------|-------|----------|---------|
 | **Bug** | `bug` | medium | "the bridge keeps crashing" |
-| **Friction** | `friction` | low | "I can never find my tasks on the dashboard" |
+| **Friction** | `friction` | low | "I can never find my tasks in Qareen" |
 | **Idea** | `enhancement` | low | "I wish the morning briefing showed weather" |
 | **Missing** | `missing-feature` | low | "there's no way to snooze a task" |
 
@@ -69,7 +69,7 @@ launchctl list 2>/dev/null | grep com.aos
 # 2. Relevant logs (pick the right one)
 tail -50 ~/.aos/logs/bridge.log          # bridge issues
 tail -50 ~/.aos/logs/bridge.err.log      # bridge crashes
-tail -50 ~/.aos/logs/dashboard.log       # dashboard issues
+tail -50 ~/.aos/logs/qareen.err.log      # Qareen issues
 tail -50 ~/.aos/logs/crons/scheduler.log # cron job failures
 
 # 3. System context

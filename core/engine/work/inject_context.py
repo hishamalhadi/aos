@@ -51,7 +51,7 @@ try:
 except Exception:
     _safe_exit(_check_onboarding() or "")
 
-DASHBOARD_URL = "http://127.0.0.1:4096"
+QAREEN_URL = "http://127.0.0.1:4096"
 
 # Add ontology backend to path
 _this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -556,7 +556,7 @@ def main():
 
     guidance = "\n".join(guidance_lines)
 
-    # Notify dashboard of session start (fire-and-forget)
+    # Notify Qareen of session start (fire-and-forget)
     try:
         Path(cwd).name if cwd else "unknown"
         notify_data = json.dumps({
@@ -569,14 +569,14 @@ def main():
             }
         }).encode()
         req = urllib.request.Request(
-            f"{DASHBOARD_URL}/api/sessions/hook",
+            f"{QAREEN_URL}/api/sessions/hook",
             data=notify_data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=1)
     except Exception:
-        pass  # Dashboard may not be running
+        pass  # Qareen may not be running
 
     output = {
         "additionalContext": f"[Work System]\n{context}\n---\n{guidance}"

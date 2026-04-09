@@ -34,7 +34,7 @@ days:
 
       And anytime you want to think out loud, just tell Chief "let me ramble" or "brain dump." It organizes your thoughts into tasks, ideas, and notes.
 
-  # ── Day 3: Work system + dashboard ──────────────────────
+  # ── Day 3: Work system ──────────────────────────────────
   - day: 3
     time: midday
     message: |
@@ -44,7 +44,7 @@ days:
         /work list
         /work done "competitors"
 
-      Tasks auto-assign to whatever project you're working in. Check your dashboard to see it all: http://localhost:4096
+      Tasks auto-assign to whatever project you're working in. Open http://localhost:4096 to see everything in Qareen.
 
   # ── Day 4: Build things + extract ───────────────────────
   - day: 4

@@ -44,7 +44,7 @@ function AccountsContent() {
       <SettingCard icon={Key} title="Accounts">
         <SettingRow
           label="Unavailable"
-          description="Account data couldn't be loaded. The dashboard may need to be restarted."
+          description="Account data couldn't be loaded. Qareen may need to be restarted."
         />
       </SettingCard>
     );

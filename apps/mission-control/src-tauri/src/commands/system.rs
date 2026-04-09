@@ -4,7 +4,7 @@ use std::process::Command;
 /// Known AOS services managed via launchctl.
 const AOS_SERVICES: &[&str] = &[
     "com.aos.bridge",
-    "com.aos.dashboard",
+    "com.aos.qareen",
     "com.aos.eventd",
     "com.aos.listen",
     "com.aos.transcriber",

@@ -10,7 +10,7 @@ export function ErrorBanner({ message }: { message?: string }) {
     <div className="flex items-center gap-3 bg-red-muted rounded-[7px] px-4 py-3 mb-6">
       <AlertTriangle className="w-4 h-4 text-red shrink-0" />
       <span className="text-[13px] text-red flex-1">
-        {message || "Can't reach AOS services. Is the dashboard running?"}
+        {message || "Can't reach AOS services. Is Qareen running?"}
       </span>
       <button
         type="button"

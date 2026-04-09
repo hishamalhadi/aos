@@ -1,7 +1,7 @@
 """
 AOS Work Query — Filter, sort, search, and tree queries.
 
-Used by skills, CLI, and dashboard to find relevant work items.
+Used by skills, CLI, and Qareen to find relevant work items.
 v2: Subtask trees, progress rollup, handoff-aware queries.
 """
 

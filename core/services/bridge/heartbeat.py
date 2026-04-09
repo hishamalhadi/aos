@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 import yaml
-from activity_client import log_activity as log_dashboard_activity
+from activity_client import log_activity as log_qareen_activity
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +107,11 @@ def _check_health() -> dict:
     except Exception:
         pass
 
-    # Dashboard
-    dashboard_ok = False
+    # Qareen
+    qareen_ok = False
     try:
         r = httpx.get("http://localhost:4096/api/health", timeout=3)
-        dashboard_ok = r.status_code == 200
+        qareen_ok = r.status_code == 200
     except Exception:
         pass
 
@@ -134,7 +134,7 @@ def _check_health() -> dict:
         "ram_pct": ram_pct,
         "listen_ok": listen_ok,
         "listen_detail": listen_detail,
-        "dashboard_ok": dashboard_ok,
+        "qareen_ok": qareen_ok,
         "bridge_ok": bridge_ok,
         "pending_tasks": pending_tasks,
     }
@@ -149,8 +149,8 @@ def _find_problems(health: dict) -> list[str]:
         problems.append(f"RAM at {health['ram_pct']}% — check for runaway processes")
     if not health["listen_ok"]:
         problems.append("Listen server is DOWN")
-    if not health["dashboard_ok"]:
-        problems.append("Dashboard is DOWN")
+    if not health["qareen_ok"]:
+        problems.append("Qareen is DOWN")
     if health["pending_tasks"] > 0:
         problems.append(f"{health['pending_tasks']} pending task(s)")
     return problems
@@ -162,7 +162,7 @@ def start_heartbeat(bot_token: str, chat_id: int, interval_minutes: int = 30):
     - Delays first check by 60s to let other services start
     - Only messages when something is wrong
     - Only reports NEW problems (deduplicates across cycles)
-    - Logs every check to dashboard (silent or not)
+    - Logs every check to Qareen (silent or not)
     """
 
     def _loop():
@@ -179,8 +179,8 @@ def start_heartbeat(bot_token: str, chat_id: int, interval_minutes: int = 30):
                     problems = _find_problems(health)
                     summary = f"disk:{health['disk_pct']}% ram:{health['ram_pct']}% listen:{'ok' if health['listen_ok'] else 'DOWN'}"
 
-                    # Always log to dashboard
-                    log_dashboard_activity("ops", "heartbeat", summary=summary)
+                    # Always log to Qareen
+                    log_qareen_activity("ops", "heartbeat", summary=summary)
 
                     if problems:
                         # Only report NEW problems (not already flagged)
@@ -193,7 +193,7 @@ def start_heartbeat(bot_token: str, chat_id: int, interval_minutes: int = 30):
                                 json={"chat_id": chat_id, "text": msg},
                                 timeout=10,
                             )
-                            log_dashboard_activity("ops", "heartbeat_alert", summary=msg[:200])
+                            log_qareen_activity("ops", "heartbeat_alert", summary=msg[:200])
                             logger.info(f"Heartbeat alert (new): {new_problems}")
 
                         # Update tracked problems

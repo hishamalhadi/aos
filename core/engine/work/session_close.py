@@ -7,7 +7,7 @@ Runs on SessionEnd. Three jobs:
 2. Link session to work system tasks and threads
 3. Detect untracked work — scan transcript for tool calls (Write, Edit, Bash)
    and if substantial work happened but no tasks were started/completed/created,
-   log a "session_untracked" activity event so it shows up in the dashboard.
+   log a "session_untracked" activity event so it shows up in the Qareen.
 
 Claude Code hooks protocol:
 - Read hook input from stdin (JSON with session info)
@@ -34,7 +34,7 @@ except ImportError:
 
 LOG_DIR = Path.home() / ".aos" / "logs"
 LOG_FILE = LOG_DIR / "sessions.jsonl"
-DASHBOARD_URL = "http://127.0.0.1:4096"
+QAREEN_URL = "http://127.0.0.1:4096"
 
 # Add ontology backend to path
 _this_dir = os.path.dirname(os.path.abspath(__file__))
@@ -43,12 +43,12 @@ _work_dir = os.path.abspath(os.path.join(_this_dir, '..', '..', 'work'))
 sys.path.insert(0, _work_dir)
 
 
-def _notify_dashboard(event: dict) -> None:
-    """POST event to dashboard SSE stream. Best-effort."""
+def _notify_qareen(event: dict) -> None:
+    """POST event to Qareen SSE stream. Best-effort."""
     try:
         data = json.dumps(event).encode()
         req = urllib.request.Request(
-            f"{DASHBOARD_URL}/api/work/notify",
+            f"{QAREEN_URL}/api/work/notify",
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
@@ -133,21 +133,21 @@ def main():
     with open(LOG_FILE, "a") as f:
         f.write(json.dumps(entry) + "\n")
 
-    # Notify dashboard of session end (fire-and-forget)
+    # Notify Qareen of session end (fire-and-forget)
     try:
         notify_data = json.dumps({
             "hook_type": "stop",
             "payload": {"session_id": session_id}
         }).encode()
         req = urllib.request.Request(
-            f"{DASHBOARD_URL}/api/sessions/hook",
+            f"{QAREEN_URL}/api/sessions/hook",
             data=notify_data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=1)
     except Exception:
-        pass  # Dashboard may not be running
+        pass  # Qareen may not be running
 
     # --- Step 2: Link to work system ---
     try:
@@ -251,9 +251,9 @@ def main():
                     with open(tmp_path, "w") as f:
                         f.write(new_content)
                     os.replace(tmp_path, fpath)
-                    # Notify dashboard SSE
+                    # Notify Qareen SSE
                     try:
-                        _notify_dashboard({
+                        _notify_qareen({
                             "action": "initiative_update",
                             "title": title_val,
                             "detail": "Session touched this initiative",

@@ -11,7 +11,7 @@ AOS (Agentic Operating System) is a self-hosted AI agent runtime on a Mac Mini. 
 core/
   services/
     bridge/                     Telegram/Slack messaging bridge (daemon)
-    dashboard/                  Web UI :4096
+    qareen/                     Web UI :4096
     eventd/                     Event daemon :4097
     listen/                     Job queue server :7600
     memory/                     ChromaDB MCP server (stdio)
@@ -65,7 +65,7 @@ Claude Code session closes
 | Name        | Port  | Purpose                              |
 |-------------|-------|--------------------------------------|
 | bridge      | —     | Telegram/Slack → agent routing       |
-| dashboard   | 4096  | Live web UI for agent activity       |
+| qareen      | 4096  | Live web UI for agent activity       |
 | eventd      | 4097  | System-wide event fan-out            |
 | listen      | 7600  | Async job queue and workers          |
 | whatsmeow   | 7601  | WhatsApp adapter                     |

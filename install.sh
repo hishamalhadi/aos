@@ -2177,7 +2177,7 @@ assert s.get('hooks', {}).get('$hook_name')
     done
     # Verify critical imports in service venvs
     _check "Bridge: yaml+httpx" "'$USER_DIR/services/bridge/.venv/bin/python' -c 'import yaml, httpx'"
-    _check "Dashboard: yaml+httpx" "'$USER_DIR/services/dashboard/.venv/bin/python' -c 'import yaml, httpx, fastapi'"
+    _check "Qareen: yaml+httpx" "'$USER_DIR/services/qareen/.venv/bin/python' -c 'import yaml, httpx, fastapi'"
     _check "Listen: yaml+fastapi" "'$USER_DIR/services/listen/.venv/bin/python' -c 'import yaml, fastapi'"
 
     # Secrets accessible (login keychain)
@@ -2437,7 +2437,7 @@ main() {
         echo "  ${BOLD}Phase 1:${RESET} Prerequisites (Homebrew, Python, uv, bun, jq, ffmpeg, gh, Claude Code)"
         echo "  ${BOLD}Phase 2:${RESET} Repository clone/update, PATH setup, git config"
         echo "  ${BOLD}Phase 3:${RESET} User data bootstrap, migrations, agents, skills"
-        echo "  ${BOLD}Phase 4:${RESET} Service venvs (bridge, dashboard, listen, memory)"
+        echo "  ${BOLD}Phase 4:${RESET} Service venvs (bridge, qareen, listen, memory)"
         echo "  ${BOLD}Phase 5:${RESET} macOS provisioning (dock, desktop, terminal, preferences)"
         echo "  ${BOLD}Phase 6:${RESET} Apps (Chrome, SuperWhisper, Obsidian, Claude Code)"
         echo "  ${BOLD}Phase 7:${RESET} Health scorecard — verify everything works"

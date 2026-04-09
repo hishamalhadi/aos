@@ -31,7 +31,7 @@ AOS_ROOT = Path.home() / "aos"
 # Known AOS services with their ports
 KNOWN_SERVICES = {
     "bridge": {"port": None, "label": "com.aos.bridge"},
-    "dashboard": {"port": 4096, "label": "com.aos.dashboard"},
+    "qareen": {"port": 4096, "label": "com.aos.qareen"},
     "eventd": {"port": 4097, "label": "com.aos.eventd"},
     "listen": {"port": 7600, "label": "com.aos.listen"},
     "whatsmeow": {"port": 7601, "label": "com.aos.whatsmeow"},
