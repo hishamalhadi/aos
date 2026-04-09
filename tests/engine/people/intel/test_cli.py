@@ -6,7 +6,7 @@ exact text format of the output.
 """
 import json
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -289,3 +289,254 @@ def test_main_unhandled_exception_returns_2(capsys):
     assert rc == 2
     err = capsys.readouterr().err
     assert "Error" in err
+
+
+# ── Phase 4 command tests ────────────────────────────────────────────
+
+
+from core.engine.people.intel.profiler import PersonProfile
+from core.engine.people.intel.runner import ClassifyRunReport
+from core.engine.people.intel.taxonomy import ClassificationResult, Tier
+
+
+def _fake_profile(person_id: str = "p_test") -> PersonProfile:
+    return PersonProfile(
+        person_id=person_id,
+        person_name="Fake Person",
+        source_coverage=["test"],
+        total_messages=100,
+        total_calls=5,
+        channels_active=["imessage", "phone"],
+        channel_count=2,
+        is_multi_channel=False,
+        days_since_last=15,
+        density_score=0.45,
+        density_rank="medium",
+        dominant_pattern="consistent",
+    )
+
+
+def test_profile_command_success(capsys):
+    with patch("core.engine.people.intel.profiler.ProfileBuilder") as Builder:
+        Builder.return_value.build.return_value = _fake_profile()
+        rc = main(["profile", "p_test"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Profile for p_test" in out
+    assert "Fake Person" in out
+    assert "100" in out
+    assert "consistent" in out
+
+
+def test_profile_command_not_found(capsys):
+    with patch("core.engine.people.intel.profiler.ProfileBuilder") as Builder:
+        Builder.return_value.build.return_value = None
+        rc = main(["profile", "p_missing"])
+    assert rc == 1
+
+
+def test_profile_command_json_flag(capsys):
+    with patch("core.engine.people.intel.profiler.ProfileBuilder") as Builder:
+        Builder.return_value.build.return_value = _fake_profile()
+        main(["profile", "p_test", "--json"])
+    out = capsys.readouterr().out
+    # Must contain a JSON block at the end
+    json_start = None
+    for i, line in enumerate(out.splitlines()):
+        if line.strip() == "{":
+            json_start = i
+            break
+    assert json_start is not None
+
+
+def test_classify_command_rule_only(capsys):
+    report = ClassifyRunReport(
+        persons_profiled=10,
+        rule_classifications=10,
+        llm_classifications=0,
+        persisted=10,
+        tier_distribution={"active": 5, "core": 3, "dormant": 2},
+        dry_run=False,
+        with_llm=False,
+    )
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.run = MagicMock()
+        # asyncio.run handles the coroutine — we return a completed value
+
+        async def fake_run(**kwargs):
+            return report
+
+        mock_runner.run = fake_run
+        get_runner.return_value = mock_runner
+        rc = main(["classify", "--limit", "10"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Classification complete" in out
+    assert "active" in out
+    assert "core" in out
+
+
+def test_classify_command_passes_with_llm_and_budget(capsys):
+    report = ClassifyRunReport(
+        persons_profiled=3,
+        rule_classifications=3,
+        llm_classifications=3,
+        persisted=3,
+        tier_distribution={"active": 3},
+        with_llm=True,
+        budget_usd=0.5,
+        estimated_cost_usd=0.003,
+    )
+
+    captured_kwargs = {}
+
+    async def fake_run(**kwargs):
+        captured_kwargs.update(kwargs)
+        return report
+
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.run = fake_run
+        get_runner.return_value = mock_runner
+        rc = main(
+            [
+                "classify",
+                "--with-llm",
+                "--budget",
+                "0.5",
+                "--model",
+                "sonnet",
+                "--limit",
+                "3",
+            ]
+        )
+    assert rc == 0
+    assert captured_kwargs["with_llm"] is True
+    assert captured_kwargs["max_budget_usd"] == 0.5
+    assert captured_kwargs["llm_model"] == "sonnet"
+    assert captured_kwargs["limit"] == 3
+
+
+def test_classify_command_aborted_returns_1(capsys):
+    report = ClassifyRunReport(
+        persons_profiled=5,
+        aborted_reason="budget exceeded",
+        with_llm=True,
+        budget_usd=0.001,
+    )
+
+    async def fake_run(**kwargs):
+        return report
+
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.run = fake_run
+        get_runner.return_value = mock_runner
+        rc = main(["classify", "--with-llm", "--budget", "0.001"])
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "ABORTED" in out or "budget exceeded" in out
+
+
+def test_tiers_command_empty(capsys):
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.tier_distribution.return_value = {}
+        get_runner.return_value = mock_runner
+        rc = main(["tiers"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no classifications" in out.lower()
+
+
+def test_tiers_command_shows_distribution(capsys):
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.tier_distribution.return_value = {
+            "active": 20,
+            "core": 5,
+            "dormant": 15,
+        }
+        get_runner.return_value = mock_runner
+        rc = main(["tiers"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Total classifications: 40" in out
+    assert "active" in out
+    assert "core" in out
+    assert "20" in out
+
+
+def test_correct_command_requires_something(capsys):
+    # Neither --tier nor --tags → error
+    rc = main(["correct", "p_test"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "tier" in err.lower() or "tags" in err.lower()
+
+
+def test_correct_command_bad_tier_returns_2(capsys):
+    rc = main(["correct", "p_test", "--tier", "not_a_real_tier"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "Unknown tier" in err
+
+
+def test_correct_command_with_tier(capsys):
+    result = ClassificationResult(
+        person_id="p_test",
+        tier=Tier.CORE,
+        context_tags=[{"tag": "family_nuclear", "confidence": 1.0}],
+    )
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.record_correction.return_value = result
+        get_runner.return_value = mock_runner
+        rc = main(
+            [
+                "correct",
+                "p_test",
+                "--tier",
+                "core",
+                "--tags",
+                "family_nuclear",
+                "--notes",
+                "my brother",
+            ]
+        )
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Correction recorded" in out
+    assert "core" in out
+    assert "family_nuclear" in out
+
+
+def test_classification_command_success(capsys):
+    result = ClassificationResult(
+        person_id="p_test",
+        tier=Tier.ACTIVE,
+        context_tags=[{"tag": "friend", "confidence": 0.8}],
+        reasoning="test reason",
+        model="test-model",
+    )
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.get_classification.return_value = result
+        get_runner.return_value = mock_runner
+        rc = main(["classification", "p_test"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Classification for p_test" in out
+    assert "active" in out
+    assert "friend" in out
+    assert "test reason" in out
+
+
+def test_classification_command_not_found(capsys):
+    with patch("core.engine.people.intel.cli._get_runner") as get_runner:
+        mock_runner = MagicMock()
+        mock_runner.get_classification.return_value = None
+        get_runner.return_value = mock_runner
+        rc = main(["classification", "p_missing"])
+    assert rc == 1
