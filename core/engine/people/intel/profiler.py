@@ -1,0 +1,453 @@
+"""Profile compiler — aggregates stored signals into a PersonProfile.
+
+The SignalExtractor in Phase 3 produces per-source PersonSignals and writes
+them to the ``signal_store`` table. This module reads those rows back,
+merges them across sources, and computes a multi-dimensional profile
+that downstream classifiers consume.
+
+Inputs  : signal_store rows + (optional) circle_membership rows
+Outputs : PersonProfile dataclass with aggregates, recency, density, pattern
+
+No LLM, no side effects beyond reading people.db. Pure aggregation —
+same signals → same profile every time.
+
+Feeds:
+    classifier.RuleClassifier     — deterministic tier assignment
+    classifier.LLMClassifier      — prompt compilation for LLM context tagging
+"""
+from __future__ import annotations
+
+import logging
+import sqlite3
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+from .store import DEFAULT_DB_PATH, SignalStore
+from .types import PersonSignals
+
+logger = logging.getLogger(__name__)
+
+
+# ── Density weights — tunable, documented as module constants ────────
+#
+# Each weight describes how much a given signal dimension contributes to
+# the overall density score. Weights sum to ~1.0. Each raw value is
+# normalized against a cap (anything above the cap contributes 1.0).
+#
+# These are heuristics, not hard science — they exist to give the rule
+# classifier a reasonable "how much is going on with this person" number.
+# Tune them in one place without touching the classifier.
+
+DENSITY_WEIGHT_MESSAGES = 0.30
+DENSITY_WEIGHT_CALLS = 0.15
+DENSITY_WEIGHT_PHOTOS = 0.10
+DENSITY_WEIGHT_EMAILS = 0.05
+DENSITY_WEIGHT_CHANNELS = 0.20
+DENSITY_WEIGHT_METADATA = 0.20
+
+DENSITY_CAP_MESSAGES = 1000
+DENSITY_CAP_CALLS = 100
+DENSITY_CAP_PHOTOS = 200
+DENSITY_CAP_EMAILS = 500
+DENSITY_CAP_CHANNELS = 5          # 5+ channels → max
+DENSITY_CAP_METADATA = 10         # richness score cap
+
+# Rank thresholds — the boundaries are inclusive of the lower side.
+DENSITY_RANK_HIGH = 0.60
+DENSITY_RANK_MEDIUM = 0.30
+DENSITY_RANK_LOW = 0.01           # anything above 0 is at least "low"
+
+
+# ── Dataclass ────────────────────────────────────────────────────────
+
+@dataclass
+class PersonProfile:
+    """Aggregated, structured profile for a single person.
+
+    All fields are deterministic functions of the stored signals — no
+    randomness, no clock reads except for ``days_since_last`` which
+    compares to the current UTC time.
+    """
+
+    person_id: str
+    person_name: str = ""
+    source_coverage: list[str] = field(default_factory=list)
+    extracted_at: str | None = None
+
+    # Aggregates across all sources
+    total_messages: int = 0
+    total_calls: int = 0
+    total_photos: int = 0
+    total_emails: int = 0
+    total_mentions: int = 0
+
+    # Channel diversity
+    channels_active: list[str] = field(default_factory=list)
+    channel_count: int = 0
+    is_multi_channel: bool = False      # 3+ channels
+
+    # Temporal
+    first_interaction_date: str | None = None
+    last_interaction_date: str | None = None
+    days_since_last: int | None = None
+    span_years: float = 0.0
+
+    # Density
+    density_score: float = 0.0
+    density_rank: str = "minimal"       # high | medium | low | minimal
+
+    # Pattern (dominant temporal_pattern across signals)
+    dominant_pattern: str = "none"
+
+    # Circles (from circle_membership table; [] if none)
+    circles: list[dict] = field(default_factory=list)
+
+    # Metadata richness + flags
+    metadata_richness: int = 0
+    has_birthday: bool = False
+    has_related_names: bool = False
+    has_physical_address: bool = False
+
+    # Signal-type presence flags (for classifier heuristics)
+    has_communication_signals: bool = False
+    has_voice_signals: bool = False
+    has_physical_presence_signals: bool = False
+    has_professional_signals: bool = False
+    has_group_memberships: bool = False
+    has_mention_signals: bool = False
+    has_metadata_signals: bool = False
+
+
+# ── Helpers ──────────────────────────────────────────────────────────
+
+def _clamp(v: float, lo: float = 0.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, v))
+
+
+def _normalize(value: float, cap: float) -> float:
+    if cap <= 0:
+        return 0.0
+    return _clamp(value / cap)
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        # ISO 8601 with potential 'Z' suffix.
+        cleaned = value.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(cleaned)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, TypeError):
+        return None
+
+
+def _latest_date(*candidates: str | None) -> str | None:
+    """Return the most recent ISO date string, or None if all empty."""
+    dts: list[tuple[datetime, str]] = []
+    for c in candidates:
+        dt = _parse_iso(c)
+        if dt:
+            dts.append((dt, c or ""))
+    if not dts:
+        return None
+    dts.sort(key=lambda x: x[0], reverse=True)
+    return dts[0][1]
+
+
+def _earliest_date(*candidates: str | None) -> str | None:
+    dts: list[tuple[datetime, str]] = []
+    for c in candidates:
+        dt = _parse_iso(c)
+        if dt:
+            dts.append((dt, c or ""))
+    if not dts:
+        return None
+    dts.sort(key=lambda x: x[0])
+    return dts[0][1]
+
+
+# Precedence order for dominant_pattern — earlier in the tuple wins.
+_PATTERN_PRECEDENCE: tuple[str, ...] = (
+    "consistent",
+    "growing",
+    "fading",
+    "episodic",
+    "clustered",
+    "one_shot",
+    "none",
+)
+
+
+def _pick_dominant_pattern(patterns: list[str]) -> str:
+    seen = {p for p in patterns if p}
+    if not seen:
+        return "none"
+    for candidate in _PATTERN_PRECEDENCE:
+        if candidate in seen:
+            return candidate
+    return "none"
+
+
+def _collect_signal_dates(signals: PersonSignals) -> tuple[list[str], list[str]]:
+    """Return (firsts, lasts) — all per-signal first/last ISO date strings."""
+    firsts: list[str] = []
+    lasts: list[str] = []
+    for c in signals.communication:
+        if c.first_message_date:
+            firsts.append(c.first_message_date)
+        if c.last_message_date:
+            lasts.append(c.last_message_date)
+    for v in signals.voice:
+        if v.first_call_date:
+            firsts.append(v.first_call_date)
+        if v.last_call_date:
+            lasts.append(v.last_call_date)
+    for p in signals.physical_presence:
+        if p.first_photo_date:
+            firsts.append(p.first_photo_date)
+        if p.last_photo_date:
+            lasts.append(p.last_photo_date)
+    for pro in signals.professional:
+        if pro.first_date:
+            firsts.append(pro.first_date)
+        if pro.last_date:
+            lasts.append(pro.last_date)
+    return firsts, lasts
+
+
+def _collect_patterns(signals: PersonSignals) -> list[str]:
+    out: list[str] = []
+    for c in signals.communication:
+        out.append(c.temporal_pattern or "none")
+    for v in signals.voice:
+        out.append(v.temporal_pattern or "none")
+    for p in signals.physical_presence:
+        out.append(p.temporal_pattern or "none")
+    for pro in signals.professional:
+        out.append(pro.temporal_pattern or "none")
+    return out
+
+
+def _days_between(iso_a: str | None, iso_b: datetime) -> int | None:
+    dt = _parse_iso(iso_a)
+    if dt is None:
+        return None
+    delta = iso_b - dt
+    return max(0, delta.days)
+
+
+# ── Builder ──────────────────────────────────────────────────────────
+
+class ProfileBuilder:
+    """Load stored signals and compile them into PersonProfile objects."""
+
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self.db_path = Path(db_path) if db_path else DEFAULT_DB_PATH
+        self.store = SignalStore(self.db_path)
+
+    # ── Public API ──
+
+    def build(self, person_id: str) -> PersonProfile | None:
+        """Build a profile for one person. Returns None if no stored signals."""
+        signals = self._safe_load(person_id)
+        if signals is None:
+            return None
+        circles = self._load_circles(person_id)
+        return self._assemble(signals, circles)
+
+    def build_all(
+        self, person_ids: list[str] | None = None
+    ) -> dict[str, PersonProfile]:
+        """Build profiles for a batch of persons.
+
+        If ``person_ids`` is None, builds for every person_id present in
+        the signal_store. Persons with no signals are silently skipped.
+        """
+        if person_ids is None:
+            try:
+                person_ids = self.store.list_persons()
+            except Exception as e:
+                logger.debug("list_persons failed: %s", e)
+                return {}
+
+        circles_map = self._load_circles_batch(person_ids)
+
+        out: dict[str, PersonProfile] = {}
+        for pid in person_ids:
+            signals = self._safe_load(pid)
+            if signals is None:
+                continue
+            out[pid] = self._assemble(signals, circles_map.get(pid, []))
+        return out
+
+    # ── Internals ──
+
+    def _safe_load(self, person_id: str) -> PersonSignals | None:
+        try:
+            return self.store.load(person_id)
+        except Exception as e:
+            logger.debug("profile load failed for %s: %s", person_id, e)
+            return None
+
+    def _load_circles(self, person_id: str) -> list[dict]:
+        """Query circle + circle_membership for a single person. Best-effort."""
+        if not self.db_path.exists():
+            return []
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            return self._fetch_circles(conn, [person_id]).get(person_id, [])
+        finally:
+            conn.close()
+
+    def _load_circles_batch(self, person_ids: list[str]) -> dict[str, list[dict]]:
+        if not person_ids or not self.db_path.exists():
+            return {}
+        conn = sqlite3.connect(str(self.db_path))
+        try:
+            out: dict[str, list[dict]] = {}
+            CHUNK = 500
+            for i in range(0, len(person_ids), CHUNK):
+                chunk = person_ids[i : i + CHUNK]
+                out.update(self._fetch_circles(conn, chunk))
+            return out
+        finally:
+            conn.close()
+
+    def _fetch_circles(
+        self, conn: sqlite3.Connection, person_ids: list[str]
+    ) -> dict[str, list[dict]]:
+        """Fetch circle memberships for a chunk of persons.
+
+        Both ``circle`` and ``circle_membership`` tables are optional —
+        they exist on machines that have run migration 028 but may be
+        absent on fresh installs.
+        """
+        if not person_ids:
+            return {}
+        placeholders = ",".join("?" * len(person_ids))
+        query = (
+            f"SELECT cm.person_id, c.name, c.circle_type, cm.confidence "
+            f"FROM circle_membership cm "
+            f"JOIN circle c ON c.id = cm.circle_id "
+            f"WHERE cm.person_id IN ({placeholders})"
+        )
+        out: dict[str, list[dict]] = {}
+        try:
+            rows = conn.execute(query, tuple(person_ids)).fetchall()
+        except sqlite3.Error as e:
+            logger.debug("circle query failed: %s", e)
+            return {}
+        for person_id, name, ctype, confidence in rows:
+            out.setdefault(person_id, []).append(
+                {
+                    "name": name or "",
+                    "type": ctype or "",
+                    "confidence": float(confidence) if confidence is not None else 0.0,
+                }
+            )
+        return out
+
+    def _assemble(
+        self, signals: PersonSignals, circles: list[dict]
+    ) -> PersonProfile:
+        profile = PersonProfile(
+            person_id=signals.person_id,
+            person_name=signals.person_name or "",
+            source_coverage=list(signals.source_coverage),
+            extracted_at=signals.extracted_at,
+        )
+
+        # Aggregates from signals
+        profile.total_messages = signals.total_messages
+        profile.total_calls = signals.total_calls
+        profile.total_photos = signals.total_photos
+        profile.total_emails = signals.total_emails
+        profile.total_mentions = sum(m.total_mentions for m in signals.mentions)
+
+        # Channels
+        profile.channels_active = signals.channels_active
+        profile.channel_count = signals.channel_count
+        profile.is_multi_channel = signals.is_multi_channel
+
+        # Presence flags
+        profile.has_communication_signals = bool(signals.communication)
+        profile.has_voice_signals = bool(signals.voice)
+        profile.has_physical_presence_signals = bool(signals.physical_presence)
+        profile.has_professional_signals = bool(signals.professional)
+        profile.has_group_memberships = bool(signals.group_membership)
+        profile.has_mention_signals = bool(signals.mentions)
+        profile.has_metadata_signals = bool(signals.metadata)
+
+        # Temporal bounds
+        firsts, lasts = _collect_signal_dates(signals)
+        profile.first_interaction_date = _earliest_date(*firsts)
+        profile.last_interaction_date = _latest_date(*lasts)
+
+        now = datetime.now(timezone.utc)
+        profile.days_since_last = _days_between(profile.last_interaction_date, now)
+
+        first_dt = _parse_iso(profile.first_interaction_date)
+        last_dt = _parse_iso(profile.last_interaction_date)
+        if first_dt and last_dt and last_dt >= first_dt:
+            profile.span_years = round((last_dt - first_dt).days / 365.25, 2)
+
+        # Dominant pattern
+        profile.dominant_pattern = _pick_dominant_pattern(_collect_patterns(signals))
+
+        # Circles
+        profile.circles = list(circles)
+
+        # Metadata richness + flags
+        total_richness = 0
+        has_birthday = False
+        has_related = False
+        has_addr = False
+        for m in signals.metadata:
+            total_richness += m.richness_score
+            if m.has_birthday:
+                has_birthday = True
+            if m.has_related_names:
+                has_related = True
+            if m.has_address:
+                has_addr = True
+        profile.metadata_richness = total_richness
+        profile.has_birthday = has_birthday
+        profile.has_related_names = has_related
+        profile.has_physical_address = has_addr
+
+        # Density score + rank
+        profile.density_score = self._compute_density(profile)
+        profile.density_rank = self._rank_density(profile.density_score)
+
+        return profile
+
+    def _compute_density(self, profile: PersonProfile) -> float:
+        score = (
+            DENSITY_WEIGHT_MESSAGES
+            * _normalize(profile.total_messages, DENSITY_CAP_MESSAGES)
+            + DENSITY_WEIGHT_CALLS
+            * _normalize(profile.total_calls, DENSITY_CAP_CALLS)
+            + DENSITY_WEIGHT_PHOTOS
+            * _normalize(profile.total_photos, DENSITY_CAP_PHOTOS)
+            + DENSITY_WEIGHT_EMAILS
+            * _normalize(profile.total_emails, DENSITY_CAP_EMAILS)
+            + DENSITY_WEIGHT_CHANNELS
+            * _normalize(profile.channel_count, DENSITY_CAP_CHANNELS)
+            + DENSITY_WEIGHT_METADATA
+            * _normalize(profile.metadata_richness, DENSITY_CAP_METADATA)
+        )
+        return round(_clamp(score, 0.0, 1.0), 4)
+
+    @staticmethod
+    def _rank_density(score: float) -> str:
+        if score >= DENSITY_RANK_HIGH:
+            return "high"
+        if score >= DENSITY_RANK_MEDIUM:
+            return "medium"
+        if score >= DENSITY_RANK_LOW:
+            return "low"
+        return "minimal"
