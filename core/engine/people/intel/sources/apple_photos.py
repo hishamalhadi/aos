@@ -436,6 +436,11 @@ class ApplePhotosAdapter(SignalAdapter):
             sig.detected_gender = int(gender) if gender is not None else None
 
         # Fetch all photos this person appears in.
+        #
+        # ZIMPORTEDBYBUNDLEIDENTIFIER lives in ZADDITIONALASSETATTRIBUTES
+        # on modern macOS, not ZASSET — join via the ZASSET foreign key.
+        # We LEFT JOIN so assets without an additional-attributes row still
+        # count, just with a NULL bundle_id.
         try:
             rows = conn.execute(
                 """
@@ -443,16 +448,33 @@ class ApplePhotosAdapter(SignalAdapter):
                        a.ZDATECREATED AS z_date,
                        a.ZLATITUDE AS lat,
                        a.ZLONGITUDE AS lon,
-                       a.ZIMPORTEDBYBUNDLEIDENTIFIER AS bundle_id
+                       aa.ZIMPORTEDBYBUNDLEIDENTIFIER AS bundle_id
                 FROM ZDETECTEDFACE f
                 JOIN ZASSET a ON a.Z_PK = f.ZASSETFORFACE
+                LEFT JOIN ZADDITIONALASSETATTRIBUTES aa ON aa.ZASSET = a.Z_PK
                 WHERE f.ZPERSONFORFACE = ?
                 """,
                 (pk,),
             ).fetchall()
-        except sqlite3.Error as e:
-            log.warning("apple_photos: asset query failed pk=%s: %s", pk, e)
-            return sig
+        except sqlite3.Error:
+            # Fallback: some macOS versions keep the bundle id on ZASSET itself.
+            try:
+                rows = conn.execute(
+                    """
+                    SELECT a.Z_PK AS asset_pk,
+                           a.ZDATECREATED AS z_date,
+                           a.ZLATITUDE AS lat,
+                           a.ZLONGITUDE AS lon,
+                           a.ZIMPORTEDBYBUNDLEIDENTIFIER AS bundle_id
+                    FROM ZDETECTEDFACE f
+                    JOIN ZASSET a ON a.Z_PK = f.ZASSETFORFACE
+                    WHERE f.ZPERSONFORFACE = ?
+                    """,
+                    (pk,),
+                ).fetchall()
+            except sqlite3.Error as e2:
+                log.warning("apple_photos: asset query failed pk=%s: %s", pk, e2)
+                return sig
 
         if not rows:
             return sig

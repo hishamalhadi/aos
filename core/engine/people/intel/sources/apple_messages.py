@@ -293,7 +293,7 @@ class AppleMessagesAdapter(SignalAdapter):
                 m.is_from_me AS is_from_me,
                 m.service AS service,
                 m.associated_message_type AS associated_message_type,
-                m.attachedFileCount AS attached_file_count
+                m.cache_has_attachments AS attached_file_count
             FROM message m
             JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
             JOIN chat_handle_join chj ON chj.chat_id = cmj.chat_id

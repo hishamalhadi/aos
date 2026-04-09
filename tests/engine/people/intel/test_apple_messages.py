@@ -55,7 +55,7 @@ def build_fixture_db(path: Path) -> None:
                 is_from_me INTEGER,
                 service TEXT,
                 associated_message_type INTEGER,
-                attachedFileCount INTEGER
+                cache_has_attachments INTEGER
             );
             CREATE TABLE chat_message_join (
                 chat_id INTEGER,
@@ -171,7 +171,7 @@ def build_fixture_db(path: Path) -> None:
             """
             INSERT INTO message (
                 ROWID, handle_id, text, date, is_from_me, service,
-                associated_message_type, attachedFileCount
+                associated_message_type, cache_has_attachments
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             messages,
@@ -312,7 +312,7 @@ def test_media_and_attachments(
     adapter = AppleMessagesAdapter(db_path=fixture_db)
     result = adapter.extract_all(person_index)
     comm = result["p_alice"].communication[0]
-    # One sent message with attachedFileCount > 0
+    # One sent message with cache_has_attachments > 0
     assert comm.media_sent == 1
     assert comm.media_received == 0
 
