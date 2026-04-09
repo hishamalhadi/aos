@@ -50,6 +50,22 @@ class ExtractionResult:
     comments: list[dict] = field(default_factory=list)  # [{author, text, like_count}]
     ocr_text: list[dict] = field(default_factory=list)  # [{timestamp, text}]
 
+    # Visual extraction (storyboard triage)
+    visual_summary: str = ""  # Claude's overall visual assessment
+    visual_triage: list[dict] = field(default_factory=list)  # [{timestamp, classification, description}]
+    visual_content_flags: list[str] = field(default_factory=list)  # ["has_code", "has_slides", ...]
+    hires_frames: list[dict] = field(default_factory=list)  # [{timestamp, path, analysis}]
+
+    # Link extraction (from description)
+    links: dict = field(default_factory=dict)  # {github: [...], video: [...], ...}
+    link_research: list[dict] = field(default_factory=list)  # Findings after fetching/cloning
+
+    # Provenance — which pipeline stages ran, when, and with what result
+    provenance: list[dict] = field(default_factory=list)
+    # Each entry: {stage, timestamp, status, **details}
+    # e.g. {"stage": "transcript", "timestamp": "2026-04-09T10:15:03",
+    #       "status": "success", "source": "captions", "chars": 46898}
+
     # Routing context
     source_context: SourceContext | None = None
 
@@ -60,6 +76,20 @@ class ExtractionResult:
     # Output tracking
     vault_path: str | None = None
     extracted_at: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def add_stage(self, stage: str, status: str = "success", **details) -> None:
+        """Record that a pipeline stage ran. Appended to provenance."""
+        entry = {
+            "stage": stage,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "status": status,
+        }
+        entry.update(details)
+        self.provenance.append(entry)
+
+    @property
+    def has_visual_content(self) -> bool:
+        return any(f.get("has_readable_content") for f in self.visual_triage)
 
     @property
     def has_transcript(self) -> bool:
@@ -90,6 +120,15 @@ class ExtractionResult:
             "fallback_reason": self.fallback_reason,
             "vault_path": self.vault_path,
             "extracted_at": self.extracted_at,
+            "visual_summary": self.visual_summary,
+            "visual_triage": self.visual_triage,
+            "visual_content_flags": self.visual_content_flags,
+            "hires_frames": [
+                {k: v for k, v in f.items() if k != "path"}
+                for f in self.hires_frames
+            ],
+            "links": self.links,
+            "provenance": self.provenance,
         }
         if self.source_context:
             d["source_context"] = self.source_context.__dict__
