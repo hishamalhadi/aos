@@ -49,7 +49,17 @@ class QareenContext:
 
     # Entity mentions
     recent_entities: list[dict[str, Any]] = field(default_factory=list)
-    # Each: {"name": str, "type": str, "last_mentioned": str}
+    # Each: {
+    #   "name": str,
+    #   "type": str,
+    #   "entity_id": str | None,
+    #   "last_mentioned": str,
+    #   # Phase 5 enrichment (populated when type == "person", optional):
+    #   "tier": str | None,                 # core/active/fading/... or None
+    #   "context_tags": list[str],          # top 3 tags from classification
+    #   "days_since_last": int | None,      # recency from profile
+    #   "channels_active": list[str],       # top 3 active channels
+    # }
 
     # Navigation
     page_history: list[str] = field(default_factory=list)
