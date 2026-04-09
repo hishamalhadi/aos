@@ -31,6 +31,8 @@ from .extractor import SignalExtractor
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PEOPLE_DB = Path.home() / ".aos" / "data" / "people.db"
+
 
 # ── Formatting helpers (plain text, no deps) ────────────────────────
 
@@ -494,6 +496,91 @@ def cmd_show_classification(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── Nudges ───────────────────────────────────────────────────────────
+
+
+def _nudge_db(args: argparse.Namespace) -> "object":  # noqa: F821
+    """Open a sqlite connection to the people DB; raise SystemExit on missing."""
+    import sqlite3
+    db_path = Path(args.db) if args.db else DEFAULT_PEOPLE_DB
+    if not db_path.exists():
+        print(f"error: people.db not found at {db_path}", file=sys.stderr)
+        raise SystemExit(2)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def _fmt_age(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        return f"{seconds // 3600}h"
+    return f"{seconds // 86400}d"
+
+
+def cmd_nudges_generate(args: argparse.Namespace) -> int:
+    """Run all nudge generators against people.db (idempotent)."""
+    from . import nudges as nudges_mod
+
+    conn = _nudge_db(args)
+    try:
+        counts = nudges_mod.generate_all(conn)
+    finally:
+        conn.close()
+
+    _print_header("People Intelligence — nudges generated")
+    total = sum(counts.values())
+    for k, v in counts.items():
+        print(f"  {k}: {v}")
+    print(f"  total inserted: {total}")
+    return 0
+
+
+def cmd_nudges_list(args: argparse.Namespace) -> int:
+    """List currently-live pending nudges."""
+    from . import nudges as nudges_mod
+
+    conn = _nudge_db(args)
+    try:
+        live = nudges_mod.list_live_nudges(conn, limit=args.limit)
+    finally:
+        conn.close()
+
+    if not live:
+        print("No live nudges.")
+        return 0
+
+    _print_header(f"People Intelligence — live nudges ({len(live)})")
+    import time as _time
+    now = int(_time.time())
+    for n in live:
+        age = _fmt_age(max(0, now - int(n["created_at"] or now)))
+        print(
+            f"  {n['id']}  [{n['surface_type']:9}] p{n['priority']} "
+            f"({age} old)  {n['content']}"
+        )
+    return 0
+
+
+def cmd_nudge_done(args: argparse.Namespace) -> int:
+    """Mark a nudge as actioned by id."""
+    from . import nudges as nudges_mod
+
+    conn = _nudge_db(args)
+    try:
+        ok = nudges_mod.mark_actioned(conn, args.nudge_id)
+    finally:
+        conn.close()
+    if ok:
+        print(f"✓ {args.nudge_id} marked as acted")
+        return 0
+    print(f"✗ {args.nudge_id} not found or not pending", file=sys.stderr)
+    return 1
+
+
 # ── Parser ───────────────────────────────────────────────────────────
 
 
@@ -618,6 +705,23 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("person_id", help="Person ID")
     sp.add_argument("--json", action="store_true", help="Print full result as JSON")
     sp.set_defaults(func=cmd_show_classification)
+
+    # nudges-generate
+    sp = sub.add_parser(
+        "nudges-generate",
+        help="Run all nudge generators (birthday, drift, reconnect)",
+    )
+    sp.set_defaults(func=cmd_nudges_generate)
+
+    # nudges
+    sp = sub.add_parser("nudges", help="List currently-live pending nudges")
+    sp.add_argument("--limit", type=int, default=20, help="Max rows (default 20)")
+    sp.set_defaults(func=cmd_nudges_list)
+
+    # nudge-done <id>
+    sp = sub.add_parser("nudge-done", help="Mark a nudge as actioned")
+    sp.add_argument("nudge_id", help="Nudge ID (e.g. iq_abc12345)")
+    sp.set_defaults(func=cmd_nudge_done)
 
     return parser
 

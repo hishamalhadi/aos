@@ -619,6 +619,25 @@ def main():
     except Exception:
         pass  # Never crash the hook
 
+    # --- People nudges ---
+    # Surface live nudges from intelligence_queue (birthday, drift, reconnect).
+    # Reads from morning-context.yaml which is refreshed daily by the cron.
+    try:
+        mc_path = Path.home() / ".aos" / "work" / "morning-context.yaml"
+        if mc_path.exists():
+            mc = yaml.safe_load(mc_path.read_text()) or {}
+            nudges_list = mc.get("people_today") or []
+            if nudges_list:
+                lines.append("")
+                lines.append("**People nudges:**")
+                for nudge in nudges_list[:5]:
+                    if isinstance(nudge, dict):
+                        prompt = nudge.get("prompt", "")
+                        if prompt:
+                            lines.append(f"- {prompt}")
+    except Exception:
+        pass  # Never crash the hook
+
     # --- System Capabilities ---
     # Inject capability map so Chief knows execution methods and fallback chains.
     # This prevents "I can't do X" when 3 other methods exist.
