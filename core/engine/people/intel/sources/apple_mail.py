@@ -289,16 +289,21 @@ class AppleMailAdapter(SignalAdapter):
         has_addresses_table = self._has_table(conn, "addresses")
 
         # Load senders.
+        #
+        # On modern macOS (V10+) the `senders` table holds no email text
+        # at all — just `contact_identifier`, `bucket`, `user_initiated`.
+        # Messages instead point at `addresses` directly via `messages.sender`.
+        # On legacy versions `senders.address` exists. Try the legacy query
+        # first; if it fails with a column error, fall back to empty and
+        # rely on `addresses` for everything.
+        sender_rowid_to_address: dict[int, str] = {}
         try:
             sender_rows = conn.execute("SELECT ROWID, address FROM senders").fetchall()
+            for r in sender_rows:
+                addr = (r["address"] or "").strip().lower()
+                sender_rowid_to_address[int(r["ROWID"])] = addr
         except sqlite3.Error as e:
-            log.warning("apple_mail: senders query failed: %s", e)
-            return {}
-
-        sender_rowid_to_address: dict[int, str] = {}
-        for r in sender_rows:
-            addr = (r["address"] or "").strip().lower()
-            sender_rowid_to_address[int(r["ROWID"])] = addr
+            log.debug("apple_mail: senders has no address column (modern schema): %s", e)
 
         # Load addresses table if present.
         addr_rowid_to_address: dict[int, str] = {}
@@ -312,6 +317,12 @@ class AppleMailAdapter(SignalAdapter):
                     addr_rowid_to_address[int(r["ROWID"])] = addr
             except sqlite3.Error as e:
                 log.warning("apple_mail: addresses query failed: %s", e)
+
+        # If we have neither senders-with-address nor addresses table,
+        # there's nothing to match — abort this run for this source.
+        if not sender_rowid_to_address and not addr_rowid_to_address:
+            log.warning("apple_mail: no address text found in either senders or addresses")
+            return {}
 
         # Load mailboxes to detect sent/drafts.
         try:
@@ -352,15 +363,26 @@ class AppleMailAdapter(SignalAdapter):
             return {}
 
         # Load recipients (best-effort).
-        # recipients.address_id points to either `addresses` or `senders` depending on version.
+        #
+        # Column names vary across macOS versions:
+        #   legacy: recipients(message_id, address_id, type, ...)
+        #   modern: recipients(message, address, type, position)
+        # The modern schema doesn't use "_id" suffixes. Try modern first,
+        # fall back to legacy — both forms are read-only and harmless.
         message_to_recipients: dict[int, list[str]] = {}
-        try:
-            rcp_rows = conn.execute(
-                "SELECT message_id, address_id FROM recipients"
-            ).fetchall()
+
+        def _collect_recipients(sql: str, msg_col: str, addr_col: str) -> bool:
+            try:
+                rcp_rows = conn.execute(sql).fetchall()
+            except sqlite3.Error as e:
+                log.debug("apple_mail: recipients query %r failed: %s", sql, e)
+                return False
             for r in rcp_rows:
-                mid = int(r["message_id"])
-                aid = int(r["address_id"])
+                try:
+                    mid = int(r[msg_col])
+                    aid = int(r[addr_col])
+                except (KeyError, TypeError, ValueError):
+                    continue
                 if has_addresses_table and aid in addr_rowid_to_address:
                     addr = addr_rowid_to_address[aid]
                 elif aid in sender_rowid_to_address:
@@ -370,8 +392,18 @@ class AppleMailAdapter(SignalAdapter):
                 if not addr:
                     continue
                 message_to_recipients.setdefault(mid, []).append(addr)
-        except sqlite3.Error as e:
-            log.warning("apple_mail: recipients query failed (best-effort): %s", e)
+            return True
+
+        # Modern schema first
+        if not _collect_recipients(
+            "SELECT message, address FROM recipients", "message", "address"
+        ):
+            # Legacy fallback
+            _collect_recipients(
+                "SELECT message_id, address_id FROM recipients",
+                "message_id",
+                "address_id",
+            )
 
         # Accumulator per person.
         # { pid: {
