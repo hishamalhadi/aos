@@ -2356,3 +2356,139 @@ async def send_message_to_person(
             success=False, channel=channel, recipient=recipient or "",
             message=f"Error: {e}",
         )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# People Intelligence endpoints
+#
+# Wrap the People Intelligence SignalExtractor subsystem
+# (core/engine/people/intel/) behind HTTP. Every handler is wrapped in
+# try/except so an intel subsystem bug (import error, missing DB,
+# adapter crash) NEVER bricks the rest of /api/people.
+#
+# These endpoints are read-mostly:
+#   GET  /api/people/intel/coverage   — static adapter registration info
+#   POST /api/people/intel/extract    — trigger extraction
+#   GET  /api/people/intel/stats      — signal store row counts
+#   GET  /api/people/{id}/intel       — stored signals for one person
+# ─────────────────────────────────────────────────────────────────────
+
+
+class IntelExtractRequest(BaseModel):
+    """POST /api/people/intel/extract body."""
+
+    person_ids: list[str] | None = Field(
+        default=None,
+        description="Optional list of person IDs to extract. None = all persons.",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Optional cap on persons indexed (after filtering).",
+        ge=1,
+    )
+    adapter_names: list[str] | None = Field(
+        default=None,
+        description="Optional list of adapter names to run. None = all available.",
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="If True, extract but do not persist to signal_store.",
+    )
+
+
+def _intel_extractor():
+    """Lazy import so a missing intel subsystem never breaks the rest of /api/people."""
+    from core.engine.people.intel.extractor import SignalExtractor
+    return SignalExtractor()
+
+
+@router.get("/intel/coverage")
+async def get_intel_coverage() -> JSONResponse:
+    """Static adapter registration + availability + signal type coverage."""
+    try:
+        ex = _intel_extractor()
+        return JSONResponse(content=ex.coverage_report())
+    except Exception as e:
+        logger.exception("intel coverage failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "intel subsystem unavailable", "detail": str(e)},
+        )
+
+
+@router.get("/intel/stats")
+async def get_intel_stats() -> JSONResponse:
+    """Signal store row counts (total, distinct persons, by source)."""
+    try:
+        ex = _intel_extractor()
+        return JSONResponse(content=ex.stats())
+    except Exception as e:
+        logger.exception("intel stats failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "intel subsystem unavailable", "detail": str(e)},
+        )
+
+
+@router.post("/intel/extract")
+async def run_intel_extract(body: IntelExtractRequest) -> JSONResponse:
+    """Run the full extraction pipeline and return a summary report.
+
+    This is a synchronous endpoint — large runs may take several seconds.
+    For the first pass we don't offload to a thread. If latency becomes
+    a problem, wrap ``ex.run(...)`` in ``await asyncio.to_thread(...)``.
+    """
+    try:
+        ex = _intel_extractor()
+        report = ex.run(
+            person_ids=body.person_ids,
+            limit=body.limit,
+            adapter_names=body.adapter_names,
+            dry_run=body.dry_run,
+        )
+        return JSONResponse(content=report.to_dict())
+    except Exception as e:
+        logger.exception("intel extract failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "extraction failed", "detail": str(e)},
+        )
+
+
+@router.get("/{person_id}/intel")
+async def get_person_intel(person_id: str = Path(...)) -> JSONResponse:
+    """Return stored signals for one person.
+
+    Returns 404 if no signals have been extracted for this person yet.
+    Signals are serialized via dataclasses.asdict for a JSON-friendly
+    shape — caller should treat the shape as advisory, not a contract.
+    """
+    try:
+        ex = _intel_extractor()
+        signals = ex.get_person_signals(person_id)
+        if signals is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "no signals stored for this person"},
+            )
+        from dataclasses import asdict
+
+        payload = asdict(signals)
+        # Also include the computed aggregates that are @property on the
+        # dataclass (asdict doesn't pick them up).
+        payload["_aggregates"] = {
+            "total_messages": signals.total_messages,
+            "total_calls": signals.total_calls,
+            "total_photos": signals.total_photos,
+            "total_emails": signals.total_emails,
+            "channels_active": signals.channels_active,
+            "channel_count": signals.channel_count,
+            "is_multi_channel": signals.is_multi_channel,
+        }
+        return JSONResponse(content=payload)
+    except Exception as e:
+        logger.exception("intel person signals failed for %s", person_id)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "intel lookup failed", "detail": str(e)},
+        )
