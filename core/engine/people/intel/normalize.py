@@ -243,6 +243,19 @@ def _normalize_one(raw: str) -> list[str]:
 
 # ── Public API ───────────────────────────────────────────────────────
 
+def component_variants(spaced: str, min_length: int = 4) -> list[str]:
+    """Return individual lowercased token variants from a spaced name.
+
+    For matching first-name-only or component-only mentions in long
+    narrative text. Only tokens >= min_length are returned to reduce
+    false positives. Deduplicated, order preserved.
+    """
+    if not spaced:
+        return []
+    tokens = [t.lower() for t in spaced.split() if len(t) >= min_length]
+    return list(dict.fromkeys(tokens))
+
+
 def normalize_canonical_name(raw: str | None) -> NormalizedName:
     """Normalize a people.db canonical_name into matching variants.
 

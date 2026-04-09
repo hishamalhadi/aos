@@ -29,6 +29,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
+from ..normalize import component_variants
 from ..types import (
     MentionSignal,
     PersonSignals,
@@ -101,6 +102,10 @@ class VaultAdapter(SignalAdapter):
     CONTEXTS_PER_PERSON: ClassVar[int] = 20
     MIN_NAME_LENGTH: ClassVar[int] = 4
     SNIPPET_WINDOW: ClassVar[int] = 50  # chars before and after the match
+    # Context-confirmation window for component-only matches. A component
+    # match (e.g., "Sam" alone) counts only if another component from the
+    # same canonical_name appears within this many characters of the match.
+    COMPONENT_CONFIRM_WINDOW: ClassVar[int] = 200
 
     def __init__(self, vault_root: str | None = None):
         if vault_root is None:
@@ -132,11 +137,15 @@ class VaultAdapter(SignalAdapter):
     def _extract(self, person_index: dict[str, dict]) -> dict[str, PersonSignals]:
         # Build per-person regex patterns, skipping ineligible names.
         #
-        # For each person we keep a list of compiled patterns (one per
-        # variant). A person is eligible only when at least one variant
-        # has length >= MIN_NAME_LENGTH and the lowercased raw name is
-        # not in STOPWORDS.
+        # Two pattern families per person:
+        #   - patterns:  primary full-name variants (spaced + concat)
+        #   - components: individual tokens (first name, last name, etc.)
+        #     used only for a confirmation-gated second pass
+        #
+        # A person is eligible only when at least one full-name variant has
+        # length >= MIN_NAME_LENGTH and the raw name isn't a stopword.
         patterns: dict[str, list[re.Pattern[str]]] = {}
+        components: dict[str, list[re.Pattern[str]]] = {}
         names: dict[str, str] = {}
 
         for person_id, info in person_index.items():
@@ -166,6 +175,33 @@ class VaultAdapter(SignalAdapter):
             patterns[person_id] = compiled
             names[person_id] = raw_stripped
 
+            # Build component patterns from the SPACED variant. Single-
+            # component names (e.g., "Kumar" on its own) are skipped — no
+            # second token means no confirmation is possible.
+            spaced = raw_stripped
+            # Prefer the spaced camelCase-split form if available.
+            for v in variants:
+                if " " in v:
+                    spaced = v
+                    break
+            comps = component_variants(spaced, min_length=self.MIN_NAME_LENGTH)
+            # Drop stopword components.
+            comps = [c for c in comps if c not in STOPWORDS]
+            if len(comps) >= 2:
+                comp_patterns: list[re.Pattern[str]] = []
+                for c in comps:
+                    try:
+                        comp_patterns.append(
+                            re.compile(
+                                r"\b" + re.escape(c) + r"\b",
+                                re.IGNORECASE,
+                            )
+                        )
+                    except re.error:
+                        continue
+                if comp_patterns:
+                    components[person_id] = comp_patterns
+
         if not patterns:
             return {}
 
@@ -182,11 +218,11 @@ class VaultAdapter(SignalAdapter):
 
         # Scan dailies — newest first.
         for path in self._iter_daily_files():
-            self._scan_file(path, patterns, totals, is_session=False)
+            self._scan_file(path, patterns, components, totals, is_session=False)
 
         # Scan sessions — newest first.
         for path in self._iter_session_files():
-            self._scan_file(path, patterns, totals, is_session=True)
+            self._scan_file(path, patterns, components, totals, is_session=True)
 
         # Build PersonSignals output.
         result: dict[str, PersonSignals] = {}
@@ -253,6 +289,7 @@ class VaultAdapter(SignalAdapter):
         self,
         path: Path,
         patterns: dict[str, list[re.Pattern[str]]],
+        components: dict[str, list[re.Pattern[str]]],
         totals: dict[str, dict],
         *,
         is_session: bool,
@@ -278,12 +315,70 @@ class VaultAdapter(SignalAdapter):
 
         body_len = len(body)
 
+        confirm_window = self.COMPONENT_CONFIRM_WINDOW
+
         for person_id, pats in patterns.items():
+            # ── Primary pass: full-name variants ──
             # Dedupe overlapping variants via (start, end) span set.
             spans: set[tuple[int, int]] = set()
             for pat in pats:
                 for m in pat.finditer(body):
                     spans.add((m.start(), m.end()))
+
+            # ── Second pass: component variants with context confirmation ──
+            comp_pats = components.get(person_id)
+            if comp_pats:
+                # Skip component hits that fall inside a span already
+                # matched by the primary full-name pass — otherwise
+                # "Alice Smith" would be counted once by the full-name
+                # regex and twice more by the "Alice"/"Smith" component
+                # regexes.
+                primary_spans = sorted(spans)
+
+                def _inside_primary(s: int, e: int) -> bool:
+                    for ps, pe in primary_spans:
+                        if s >= ps and e <= pe:
+                            return True
+                        if ps >= e:
+                            break
+                    return False
+
+                # Find every occurrence of every component in this file.
+                # Each hit is (component_index, start, end).
+                hits: list[tuple[int, int, int]] = []
+                for idx, cp in enumerate(comp_pats):
+                    for m in cp.finditer(body):
+                        if _inside_primary(m.start(), m.end()):
+                            continue
+                        hits.append((idx, m.start(), m.end()))
+
+                if hits:
+                    # Sort by position for a stable sweep.
+                    hits.sort(key=lambda h: h[1])
+                    # For each hit, confirm another component (different
+                    # token index) from the same canonical_name appears
+                    # within confirm_window chars.
+                    for i, (cidx, start, end) in enumerate(hits):
+                        confirmed = False
+                        # Walk neighbours forward and backward.
+                        # Forward:
+                        j = i + 1
+                        while j < len(hits) and hits[j][1] - end <= confirm_window:
+                            if hits[j][0] != cidx:
+                                confirmed = True
+                                break
+                            j += 1
+                        if not confirmed:
+                            # Backward:
+                            j = i - 1
+                            while j >= 0 and start - hits[j][2] <= confirm_window:
+                                if hits[j][0] != cidx:
+                                    confirmed = True
+                                    break
+                                j -= 1
+                        if confirmed:
+                            spans.add((start, end))
+
             if not spans:
                 continue
 

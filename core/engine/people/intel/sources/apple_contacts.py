@@ -113,6 +113,44 @@ def _ts_to_iso_date(ts: float | None) -> str | None:
     return dt.strftime("%Y-%m-%d")
 
 
+def _ts_to_yearless_date(ts: float | None) -> str | None:
+    """Convert a Core-Data / unix timestamp to ``--MM-DD`` format.
+
+    ``ZBIRTHDAYYEARLESS`` stores month-day only values (the year component
+    is meaningless — Apple uses a placeholder anchor year). We therefore
+    extract month and day and emit the ``--MM-DD`` form (ISO 8601's
+    "no year" birthday shape). Any timestamp that fails to parse returns
+    ``None``.
+    """
+    if ts is None:
+        return None
+    try:
+        f = float(ts)
+    except (TypeError, ValueError):
+        return None
+    # Try Core-Data epoch first, then raw unix as fallback.
+    dt = None
+    for candidate in (f + APPLE_EPOCH_OFFSET, f):
+        try:
+            dt = datetime.fromtimestamp(candidate, tz=timezone.utc)
+            break
+        except (OverflowError, OSError, ValueError):
+            dt = None
+            continue
+    if dt is None:
+        return None
+    return f"--{dt.month:02d}-{dt.day:02d}"
+
+
+def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """Return True if ``column`` exists on ``table``."""
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.Error:
+        return False
+    return any(r[1] == column for r in rows)
+
+
 def _ts_to_iso_full(ts: float | None) -> str | None:
     if ts is None:
         return None
@@ -288,6 +326,30 @@ class AppleContactsAdapter(SignalAdapter):
             if fn:
                 first_name_to_ids[fn].append(z_pk)
 
+        # 1b) Second pass — ZBIRTHDAYYEARLESS column holds month-day-only
+        # birthdays for contacts whose year is unknown. This is where most
+        # birthday data actually lives on modern macOS (ZBIRTHDAY often
+        # has only a handful of rows and many are pre-1900 placeholders).
+        # We always capture the yearless value when present; the final
+        # birthday computation below prefers year-aware ZBIRTHDAY and
+        # falls back to yearless only when ZBIRTHDAY is missing OR fails
+        # the [1900, 2100] year-range check.
+        if _column_exists(conn, "ZABCDRECORD", "ZBIRTHDAYYEARLESS"):
+            try:
+                for row in conn.execute(
+                    "SELECT Z_PK, ZBIRTHDAYYEARLESS FROM ZABCDRECORD "
+                    "WHERE ZBIRTHDAYYEARLESS IS NOT NULL"
+                ):
+                    pk, yearless_ts = row
+                    rec = records.get(pk)
+                    if not rec:
+                        continue
+                    rec["birthday_yearless"] = yearless_ts
+            except sqlite3.Error as e:
+                logger.debug(
+                    "apple_contacts: ZBIRTHDAYYEARLESS read failed: %s", e
+                )
+
         # 2) Phone suffix index
         phone_suffix_to_id: dict[str, int] = {}
         if _table_exists(conn, "ZABCDPHONENUMBER"):
@@ -428,8 +490,13 @@ class AppleContactsAdapter(SignalAdapter):
             if not rec:
                 continue
 
-            # Birthday
+            # Birthday — year-aware form wins. Fall back to the yearless
+            # form (--MM-DD) if the year-aware column was empty OR the
+            # value failed the [1900, 2100] year-range check (common for
+            # old Core Data placeholder timestamps).
             birthday_iso = _ts_to_iso_date(rec.get("birthday"))
+            if birthday_iso is None:
+                birthday_iso = _ts_to_yearless_date(rec.get("birthday_yearless"))
             has_birthday = birthday_iso is not None
 
             # Address
