@@ -31,7 +31,7 @@ def _line(obj: dict) -> str:
 def person_index() -> dict[str, dict]:
     return {
         "p1": {"name": "Alice Smith"},
-        "p2": {"name": "AliNaqvi"},  # camelCase canonical — tests variant match
+        "p2": {"name": "SamTaylor"},  # camelCase canonical — tests variant match
     }
 
 
@@ -110,15 +110,15 @@ def fixture_path(tmp_path: Path) -> Path:
                 "thread_id": None,
             }
         ),
-        # 6. Ali Naqvi — matches camelCase canonical "AliNaqvi".
+        # 6. Sam Taylor — matches camelCase canonical "SamTaylor".
         _line(
             {
                 "id": "tg-6",
                 "chat_id": 444,
                 "from_user": {
                     "id": 6666,
-                    "first_name": "Ali",
-                    "last_name": "Naqvi",
+                    "first_name": "Sam",
+                    "last_name": "Taylor",
                     "username": "alin",
                 },
                 "text": "assalamu alaykum",

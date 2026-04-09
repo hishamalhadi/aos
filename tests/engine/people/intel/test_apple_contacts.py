@@ -175,7 +175,7 @@ def _build_db(path: Path, *, include_social: bool = True,
     # Related names
     c.execute(
         "INSERT INTO ZABCDRELATEDNAME (ZOWNER, ZLABEL, ZNAME) VALUES (?, ?, ?)",
-        (1, "sister", "Tamia"),
+        (1, "sister", "Riley"),
     )
 
     if include_urls:
@@ -352,7 +352,7 @@ def test_related_names_captured(fixture_db, person_index_all):
     assert len(meta.related_names) == 1
     rn = meta.related_names[0]
     assert rn["label"] == "sister"
-    assert rn["name"] == "Tamia"
+    assert rn["name"] == "Riley"
 
 
 def test_group_signal_emitted_for_family_group(fixture_db, person_index_all):

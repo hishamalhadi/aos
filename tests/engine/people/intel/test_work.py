@@ -254,14 +254,14 @@ def test_skips_short_names(tmp_path: Path) -> None:
     conn.executescript(
         """
         CREATE TABLE tasks (id TEXT PRIMARY KEY, title TEXT NOT NULL, description TEXT, created_at TEXT);
-        INSERT INTO tasks VALUES ('t1', 'Ali was here', '', '2026-04-01');
+        INSERT INTO tasks VALUES ('t1', 'Kim was here', '', '2026-04-01');
         """
     )
     conn.commit()
     conn.close()
     adapter = WorkAdapter(db_path=str(db))
-    result = adapter.extract_all(_pindex(p_ali="Ali"))
-    assert "p_ali" not in result
+    result = adapter.extract_all(_pindex(p_short="Kim"))
+    assert "p_short" not in result
 
 
 def test_skips_stopword_names(tmp_path: Path) -> None:
