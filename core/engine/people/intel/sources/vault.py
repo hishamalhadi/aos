@@ -100,7 +100,15 @@ class VaultAdapter(SignalAdapter):
     DAILY_SCAN_LIMIT: ClassVar[int] = 90
     SESSION_SCAN_LIMIT: ClassVar[int] = 50
     CONTEXTS_PER_PERSON: ClassVar[int] = 20
+    # Full-name variants need 4+ chars to avoid matching "Bob" as a
+    # standalone substring against every "bob" in prose.
     MIN_NAME_LENGTH: ClassVar[int] = 4
+    # Component matches (single-token from a multi-word name) can be as
+    # short as 3 chars — common real first names are "Ali", "Zia", "Bob".
+    # False positives are prevented by COMPONENT_CONFIRM_WINDOW: a
+    # component match only counts if another component from the same
+    # canonical_name appears within N chars.
+    MIN_COMPONENT_LENGTH: ClassVar[int] = 3
     SNIPPET_WINDOW: ClassVar[int] = 50  # chars before and after the match
     # Context-confirmation window for component-only matches. A component
     # match (e.g., "Sam" alone) counts only if another component from the
@@ -184,7 +192,7 @@ class VaultAdapter(SignalAdapter):
                 if " " in v:
                     spaced = v
                     break
-            comps = component_variants(spaced, min_length=self.MIN_NAME_LENGTH)
+            comps = component_variants(spaced, min_length=self.MIN_COMPONENT_LENGTH)
             # Drop stopword components.
             comps = [c for c in comps if c not in STOPWORDS]
             if len(comps) >= 2:
