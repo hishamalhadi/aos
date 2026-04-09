@@ -214,38 +214,34 @@ function ProvidersTab() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4">
         <span className="text-[11px] text-text-quaternary">
           {total} models · {diskGb}GB on disk
         </span>
       </div>
 
-      {PURPOSE_ORDER.map(purpose => {
-        const models = byPurpose[purpose];
-        if (!models || models.length === 0) return null;
-        const preferred = models.find((m: Model) => m.status === 'preferred');
-        return (
-          <div key={purpose} className="mb-5">
-            <div className="flex items-center gap-2 mb-2">
-              <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">
-                {PURPOSE_LABELS[purpose] ?? purpose}
-              </span>
-              <span className="text-[10px] text-text-quaternary/50">({models.length})</span>
-              {preferred && (
-                <span className="text-[9px] text-accent/60 ml-auto">{preferred.name}</span>
-              )}
-            </div>
-            <div className="rounded-lg border border-border/30">
+      <div className="space-y-3">
+        {PURPOSE_ORDER.map(purpose => {
+          const models = byPurpose[purpose];
+          if (!models || models.length === 0) return null;
+          return (
+            <div key={purpose} className="rounded-lg border border-border/30 overflow-hidden">
+              <div className="flex items-center gap-2 px-3 py-2 bg-[rgba(255,245,235,0.02)]">
+                <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">
+                  {PURPOSE_LABELS[purpose] ?? purpose}
+                </span>
+                <span className="text-[10px] text-text-quaternary/40">({models.length})</span>
+              </div>
               {models.map((m: Model, i: number) => (
                 <div key={m.id}>
-                  {i > 0 && <div className="border-t border-border/20" />}
+                  {i > 0 && <div className="border-t border-border/15" />}
                   <ModelCard model={m} />
                 </div>
               ))}
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1181,63 +1177,65 @@ function ServicesTab({ connectors, credentials }: { connectors: Connector[]; cre
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-4">
+      <div className="mb-4">
         <span className="text-[11px] text-text-quaternary">
           {connected.length} connected · {services.length} total
         </span>
       </div>
 
-      {connected.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2 h-2 rounded-full bg-green" />
-            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Connected</span>
-            <span className="text-[10px] text-text-quaternary/50">({connected.length})</span>
+      <div className="space-y-4">
+        {connected.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-green" />
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Connected</span>
+              <span className="text-[10px] text-text-quaternary/40">({connected.length})</span>
+            </div>
+            <div className="space-y-2">
+              {connected.map(s => <ServiceCard key={s.id} service={s} />)}
+            </div>
           </div>
-          <div className="space-y-2">
-            {connected.map(s => <ServiceCard key={s.id} service={s} />)}
-          </div>
-        </div>
-      )}
+        )}
 
-      {partial.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2 h-2 rounded-full bg-yellow" />
-            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Partial</span>
-            <span className="text-[10px] text-text-quaternary/50">({partial.length})</span>
+        {partial.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-yellow" />
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Partial</span>
+              <span className="text-[10px] text-text-quaternary/40">({partial.length})</span>
+            </div>
+            <div className="space-y-2">
+              {partial.map(s => <ServiceCard key={s.id} service={s} />)}
+            </div>
           </div>
-          <div className="space-y-2">
-            {partial.map(s => <ServiceCard key={s.id} service={s} />)}
-          </div>
-        </div>
-      )}
+        )}
 
-      {available.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2 h-2 rounded-full bg-blue/50" />
-            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Available</span>
-            <span className="text-[10px] text-text-quaternary/50">({available.length})</span>
+        {available.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-blue/50" />
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Available</span>
+              <span className="text-[10px] text-text-quaternary/40">({available.length})</span>
+            </div>
+            <div className="space-y-2">
+              {available.map(s => <ServiceCard key={s.id} service={s} />)}
+            </div>
           </div>
-          <div className="space-y-2">
-            {available.map(s => <ServiceCard key={s.id} service={s} />)}
-          </div>
-        </div>
-      )}
+        )}
 
-      {unconfigured.length > 0 && (
-        <div className="mb-6">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="w-2 h-2 rounded-full bg-text-quaternary/30" />
-            <span className="text-[11px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Not configured</span>
-            <span className="text-[10px] text-text-quaternary/50">({unconfigured.length})</span>
+        {unconfigured.length > 0 && (
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="w-1.5 h-1.5 rounded-full bg-text-quaternary/30" />
+              <span className="text-[10px] font-[590] uppercase tracking-[0.06em] text-text-quaternary">Not configured</span>
+              <span className="text-[10px] text-text-quaternary/40">({unconfigured.length})</span>
+            </div>
+            <div className="space-y-2">
+              {unconfigured.map(s => <ServiceCard key={s.id} service={s} />)}
+            </div>
           </div>
-          <div className="space-y-2">
-            {unconfigured.map(s => <ServiceCard key={s.id} service={s} />)}
-          </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -1258,21 +1256,23 @@ export default function IntegrationsPage() {
     <div className="h-full flex flex-col bg-bg">
       {/* Content */}
       <div className="flex-1 overflow-y-auto pb-8">
-        <div className="max-w-[720px] mx-auto px-6">
-          {/* Tab pills — centered below nav chrome */}
-          <div className="flex justify-center pt-12 pb-4">
-            <div className="inline-flex items-center gap-0.5 h-8 px-1.5 rounded-full bg-bg-tertiary border border-border">
+        <div className="max-w-[720px] mx-auto px-6 pt-4">
+          {/* Tab pills */}
+          <div className="flex justify-center mb-4">
+            <div className="inline-flex items-center gap-0.5 h-8 px-1 rounded-full bg-bg-tertiary border border-border-secondary">
               {TABS.map(t => (
                 <button key={t.id} onClick={() => setTab(t.id)}
-                  className={`px-3 h-6 rounded-full text-[11px] font-[510] cursor-pointer transition-all duration-150 whitespace-nowrap ${
-                    tab === t.id ? 'bg-accent/15 text-text' : 'text-text-tertiary hover:text-text-secondary'
-                  }`}>
+                  className={`px-3 h-6 rounded-full text-[11px] font-[510] cursor-pointer transition-all whitespace-nowrap ${
+                    tab === t.id
+                      ? 'bg-accent/15 text-text'
+                      : 'text-text-secondary hover:text-text hover:bg-hover'
+                  }`}
+                  style={{ transitionDuration: '150ms' }}>
                   {t.label}
                 </button>
               ))}
             </div>
           </div>
-
           {isLoading && (
             <div className="flex items-center justify-center py-20">
               <Loader2 className="w-5 h-5 text-text-quaternary animate-spin" />
