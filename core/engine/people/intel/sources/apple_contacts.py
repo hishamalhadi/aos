@@ -263,18 +263,20 @@ class AppleContactsAdapter(SignalAdapter):
         first_name_to_ids: dict[str, list[int]] = defaultdict(list)
         full_name_to_id: dict[str, int] = {}
 
+        # ZNOTE in ZABCDRECORD is an INTEGER flag in modern macOS; real note
+        # text lives in ZABCDNOTE(ZCONTACT, ZTEXT). We fetch it below.
         for row in conn.execute(
             "SELECT Z_PK, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION, "
-            "ZJOBTITLE, ZNOTE, ZBIRTHDAY, ZCREATIONDATE FROM ZABCDRECORD"
+            "ZJOBTITLE, ZBIRTHDAY, ZCREATIONDATE FROM ZABCDRECORD"
         ):
-            z_pk, first, last, org, job, note, birthday, created = row
+            z_pk, first, last, org, job, birthday, created = row
             records[z_pk] = {
                 "z_pk": z_pk,
                 "first": first or "",
                 "last": last or "",
                 "org": org,
                 "job": job,
-                "note": note,
+                "note": None,  # filled in from ZABCDNOTE below
                 "birthday": birthday,
                 "created": created,
             }
@@ -329,7 +331,7 @@ class AppleContactsAdapter(SignalAdapter):
         addresses: dict[int, list[dict]] = defaultdict(list)
         if _table_exists(conn, "ZABCDPOSTALADDRESS"):
             for row in conn.execute(
-                "SELECT ZOWNER, ZCITY, ZCOUNTRY FROM ZABCDPOSTALADDRESS"
+                "SELECT ZOWNER, ZCITY, ZCOUNTRYNAME FROM ZABCDPOSTALADDRESS"
             ):
                 owner, city, country = row
                 if owner in matched_pks:
@@ -341,7 +343,7 @@ class AppleContactsAdapter(SignalAdapter):
         if _table_exists(conn, "ZABCDSOCIALPROFILE"):
             try:
                 for row in conn.execute(
-                    "SELECT ZOWNER, ZSERVICE, ZUSERNAME FROM ZABCDSOCIALPROFILE"
+                    "SELECT ZOWNER, ZSERVICENAME, ZUSERNAME FROM ZABCDSOCIALPROFILE"
                 ):
                     owner, service, username = row
                     if owner in matched_pks and (service or username):
@@ -376,6 +378,18 @@ class AppleContactsAdapter(SignalAdapter):
                         urls[owner].append(url)
             except sqlite3.Error as e:
                 logger.debug("apple_contacts: url read failed: %s", e)
+
+        # Notes live in a separate table on modern macOS. ZABCDNOTE.ZCONTACT
+        # → ZABCDRECORD.Z_PK, ZABCDNOTE.ZTEXT is the note body. Fall back
+        # gracefully if the table is absent or the schema varies.
+        if _table_exists(conn, "ZABCDNOTE"):
+            try:
+                for row in conn.execute("SELECT ZCONTACT, ZTEXT FROM ZABCDNOTE"):
+                    contact_pk, text = row
+                    if contact_pk in matched_pks and text and contact_pk in records:
+                        records[contact_pk]["note"] = text
+            except sqlite3.Error as e:
+                logger.debug("apple_contacts: note read failed: %s", e)
 
         # 5) Groups — build group id → name, then membership per contact.
         # Some macOS versions store groups in ZABCDGROUP, others flag rows in
