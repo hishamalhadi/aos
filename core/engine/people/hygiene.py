@@ -21,6 +21,95 @@ from rapidfuzz import fuzz
 from .normalize import normalize_email, normalize_name, normalize_phone
 
 # ---------------------------------------------------------------------------
+# Name splitting (Phase 6.1 — canonical name hygiene)
+# ---------------------------------------------------------------------------
+
+# Allowed characters in a "splittable" Latin name: letters, dot, hyphen, apostrophe.
+_SPLIT_ALLOWED_RE = re.compile(r"^[A-Za-z.\-']+$")
+# Run of 4+ consecutive uppercase letters (e.g. MICHIGAN, BRADFORDUK) — likely a tag, not a name.
+_ALLCAPS_RUN_RE = re.compile(r"[A-Z]{4,}")
+# Lowercase→Uppercase boundary.
+_LC_UC_BOUNDARY_RE = re.compile(r"(?<=[a-z])(?=[A-Z])")
+# Dot followed by a letter (no space): "Dr.Badar" → "Dr. Badar".
+_DOT_LETTER_RE = re.compile(r"\.(?=[A-Za-z])")
+
+
+def _smart_title_token(token: str) -> str:
+    """Title-case a single ASCII token, leaving any non-ASCII unchanged."""
+    try:
+        token.encode("ascii")
+        return token.title()
+    except UnicodeEncodeError:
+        return token
+
+
+def split_concatenated_name(raw: str | None) -> str | None:
+    """Try to split a CamelCase / dot-joined Latin name into spaced form.
+
+    Returns the cleaned name (e.g. ``"Abdus Samad Rashid"``) if the input is
+    safely splittable, otherwise ``None``. Never raises.
+
+    Acceptance rules (all must hold, else returns None):
+      * Input is a non-empty string of length 4–60
+      * No existing whitespace in input
+      * No ``/`` (compound entries go to the review queue)
+      * ASCII-only — letters plus ``.``, ``-``, ``'``
+      * No run of 4+ consecutive uppercase letters (location tags like
+        ``MICHIGAN`` are not names)
+      * After splitting: ≥ 2 tokens, every token 2–20 chars, total ≤ 60 chars
+      * Result must differ from the input
+
+    Examples:
+        >>> split_concatenated_name("AbdusSamadRashid")
+        'Abdus Samad Rashid'
+        >>> split_concatenated_name("Dr.BadarUlIslam")
+        'Dr. Badar Ul Islam'
+        >>> split_concatenated_name("KhaleeqUrRehman")
+        'Khaleeq Ur Rehman'
+        >>> split_concatenated_name("Ahmed") is None
+        True
+        >>> split_concatenated_name("Ahmed Ali") is None
+        True
+        >>> split_concatenated_name("AyeshaCOUSIN/MICHIGAN") is None
+        True
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+    if any(ch.isspace() for ch in raw):
+        return None
+    if "/" in raw:
+        return None
+    if not (4 <= len(raw) <= 60):
+        return None
+    if not _SPLIT_ALLOWED_RE.match(raw):
+        return None
+    if _ALLCAPS_RUN_RE.search(raw):
+        return None
+
+    # Insert space at lowercase→Uppercase boundaries.
+    spaced = _LC_UC_BOUNDARY_RE.sub(" ", raw)
+    # Insert space after dot before a letter ("Dr.Badar" → "Dr. Badar").
+    spaced = _DOT_LETTER_RE.sub(". ", spaced)
+    # Collapse any accidental double spaces.
+    spaced = re.sub(r"\s+", " ", spaced).strip()
+
+    tokens = spaced.split(" ")
+    if len(tokens) < 2:
+        return None
+    for tok in tokens:
+        if not (2 <= len(tok) <= 20):
+            return None
+
+    cleaned = " ".join(_smart_title_token(t) for t in tokens)
+    if len(cleaned) > 60 or cleaned == raw:
+        return None
+    return cleaned
+
+
+# Arabic Unicode range — used by scan_dirty_names() to flag concatenated RTL names.
+_ARABIC_RE = re.compile(r"[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]")
+
+# ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
@@ -39,7 +128,7 @@ _EMOJI_RE = re.compile(
     "\U0001FA70-\U0001FAFF"  # symbols extended
     "\U00002600-\U000026FF"  # misc symbols
     "\U0000200D"             # ZWJ
-    "\U00000020\U0000FE0F"   # VS16
+    "\U0000FE0F"             # VS16
     "]+",
     flags=re.UNICODE,
 )
@@ -276,6 +365,58 @@ class HygieneEngine:
             })
         return issues
 
+    def scan_dirty_names(self) -> list[dict[str, Any]]:
+        """Find canonical names that look concatenated but the safe splitter rejected.
+
+        Detects four sub-cases (encoded in the reason text):
+          * ``slash_compound`` — contains ``/`` (likely two people or a tag)
+          * ``allcaps_tag``    — run of 4+ uppercase letters (location/org tag)
+          * ``arabic_concat``  — Arabic-script name with no spaces, length > 8
+          * ``split_rejected`` — would-be CamelCase split, but a token failed
+                                  the size constraints (> 20 or < 2 chars)
+        """
+        rows = self.conn.execute(
+            "SELECT id, canonical_name FROM people "
+            "WHERE is_archived = 0 AND canonical_name IS NOT NULL"
+        ).fetchall()
+
+        issues: list[dict[str, Any]] = []
+        for row in rows:
+            cn = row["canonical_name"]
+            if not cn:
+                continue
+
+            sub: str | None = None
+
+            if "/" in cn:
+                sub = "slash_compound"
+            elif _ALLCAPS_RUN_RE.search(cn):
+                sub = "allcaps_tag"
+            elif _ARABIC_RE.search(cn) and " " not in cn and len(cn) > 8:
+                sub = "arabic_concat"
+            else:
+                # CamelCase candidate that the splitter rejected on token size?
+                if (
+                    len(cn) >= 4
+                    and " " not in cn
+                    and _SPLIT_ALLOWED_RE.match(cn)
+                    and _LC_UC_BOUNDARY_RE.search(cn)
+                    and split_concatenated_name(cn) is None
+                ):
+                    sub = "split_rejected"
+
+            if sub is None:
+                continue
+
+            issues.append({
+                "action_type": "rename_review",
+                "person_a_id": row["id"],
+                "person_b_id": None,
+                "confidence": 1.0,
+                "reason": f"{sub}: '{cn}'",
+            })
+        return issues
+
     def scan_all(self) -> dict[str, int]:
         """Run all scanners and insert results into hygiene_queue.
 
@@ -287,6 +428,7 @@ class HygieneEngine:
         all_issues.extend(self.scan_ghosts())
         all_issues.extend(self.scan_incomplete())
         all_issues.extend(self.scan_stale())
+        all_issues.extend(self.scan_dirty_names())
 
         counts: dict[str, int] = {}
 
@@ -353,6 +495,7 @@ class HygieneEngine:
             "names_trimmed": 0,
             "unicode_normalized": 0,
             "emoji_stripped": 0,
+            "names_split": 0,
         }
 
         # --- Normalize phones to E.164 in person_identifiers ---
@@ -438,6 +581,32 @@ class HygieneEngine:
                 if stripped != cn and stripped:
                     updates["canonical_name"] = stripped
                     counts["emoji_stripped"] += 1
+
+            # Split CamelCase / dot-joined Latin names ("AbdusSamadRashid" →
+            # "Abdus Samad Rashid"). Conservative — see split_concatenated_name.
+            cn_for_split = updates.get("canonical_name", person["canonical_name"])
+            split = split_concatenated_name(cn_for_split)
+            if split:
+                old_cn = person["canonical_name"]
+                updates["canonical_name"] = split
+                parts = split.split(" ")
+                updates["first_name"] = parts[0]
+                updates["last_name"] = " ".join(parts[1:])
+                # Only overwrite display_name if it tracks the old canonical form
+                if person["display_name"] == old_cn:
+                    updates["display_name"] = split
+                # Preserve the original concatenated form as a lookup alias
+                if old_cn:
+                    alias_val = old_cn.lower().strip()
+                    try:
+                        self.conn.execute(
+                            "INSERT INTO aliases (alias, person_id, type, priority, created_at) "
+                            "VALUES (?, ?, 'pre_split', 0, ?)",
+                            (alias_val, pid, now),
+                        )
+                    except sqlite3.IntegrityError:
+                        pass  # alias already taken (collision or rerun)
+                counts["names_split"] += 1
 
             if updates:
                 set_clause = ", ".join(f"{k} = ?" for k in updates)
