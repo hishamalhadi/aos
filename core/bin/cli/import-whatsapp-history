@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""import-whatsapp-history — one-shot backfill of WhatsApp Desktop → comms.db.
+
+Reads ChatStorage.sqlite from the WhatsApp Desktop group container and
+ingests every message into ~/.aos/data/comms.db via the canonical Qareen
+ingest module. Idempotent — safe to re-run (deterministic message IDs).
+
+Usage:
+    import-whatsapp-history                 # full history
+    import-whatsapp-history --since 2025-01-01
+    import-whatsapp-history --limit 100 --dry-run
+    import-whatsapp-history --verbose
+
+Resolves each sender JID against ~/.aos/data/people.db so every ingested
+message is linked to a person where possible (direct wa_jid match first,
+phone fallback second).
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+import time
+from datetime import datetime
+from pathlib import Path
+
+# Make the AOS codebase importable. Support both the dev workspace and the
+# runtime copy so this CLI works in either tree.
+for _candidate in (Path.home() / "project" / "aos", Path.home() / "aos"):
+    if (_candidate / "core").is_dir():
+        sys.path.insert(0, str(_candidate))
+        break
+
+from core.qareen.channels import whatsapp_desktop  # noqa: E402
+
+
+def _parse_date(s: str) -> datetime:
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid date {s!r}; use YYYY-MM-DD or ISO 8601"
+        )
+
+
+def _make_progress_printer(verbose: bool):
+    state = {"last_stage": None, "last_print": 0.0}
+
+    def cb(stage: str, current: int, total: int) -> None:
+        if not verbose:
+            return
+        now = time.time()
+        # Rate-limit progress lines to 4 Hz
+        if stage == state["last_stage"] and now - state["last_print"] < 0.25:
+            return
+        state["last_stage"] = stage
+        state["last_print"] = now
+        if total:
+            pct = 100 * current / total
+            print(f"  [{stage}] {current:,}/{total:,} ({pct:.1f}%)", file=sys.stderr)
+        else:
+            print(f"  [{stage}]", file=sys.stderr)
+
+    return cb
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="Backfill WhatsApp Desktop history into comms.db",
+    )
+    parser.add_argument(
+        "--since",
+        type=_parse_date,
+        help="Only ingest messages newer than this date (ISO 8601).",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Cap the number of messages scanned (for testing).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Scan and resolve but do not write to comms.db.",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Print per-phase progress.",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.DEBUG if args.verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+    if not whatsapp_desktop.is_available():
+        print(
+            f"error: ChatStorage.sqlite not found at "
+            f"{whatsapp_desktop.CHAT_STORAGE_PATH}",
+            file=sys.stderr,
+        )
+        return 2
+
+    print(f"Source:  {whatsapp_desktop.CHAT_STORAGE_PATH}")
+    print(f"Target:  {whatsapp_desktop.COMMS_DB}")
+    if args.since:
+        print(f"Since:   {args.since.isoformat()}")
+    if args.limit:
+        print(f"Limit:   {args.limit}")
+    if args.dry_run:
+        print("Mode:    DRY RUN (no writes)")
+    print()
+
+    started = time.time()
+    try:
+        stats = whatsapp_desktop.ingest(
+            since=args.since,
+            limit=args.limit,
+            dry_run=args.dry_run,
+            progress_cb=_make_progress_printer(args.verbose),
+        )
+    except FileNotFoundError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
+    except Exception as e:
+        print(f"error: ingest failed: {e}", file=sys.stderr)
+        return 1
+
+    elapsed = time.time() - started
+    print(stats.summary())
+    print(f"elapsed:     {elapsed:.1f}s")
+
+    if stats.errors:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
