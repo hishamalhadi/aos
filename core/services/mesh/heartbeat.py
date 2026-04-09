@@ -87,7 +87,7 @@ class HeartbeatSender:
         # Check critical AOS services
         services = [
             ("eventd", 4097),
-            ("dashboard", 4096),
+            ("qareen", 4096),
         ]
 
         for name, port in services:

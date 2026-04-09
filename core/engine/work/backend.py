@@ -8,7 +8,7 @@ All functions return plain dicts (not dataclasses) because query.py and
 cli.py expect dict access via .get(). The _to_dict() conversion is the
 bridge between the ontology's typed objects and the CLI's dict world.
 
-Side effects (activity log, dashboard SSE, GitHub sync, initiative
+Side effects (activity log, Qareen SSE, GitHub sync, initiative
 checkbox sync) are handled here in sync form — no async, no event bus.
 """
 
@@ -69,7 +69,7 @@ _gh_log = logging.getLogger("work.github")
 DB_PATH = Path.home() / ".aos" / "data" / "qareen.db"
 WORK_DIR = Path.home() / ".aos" / "work"
 ACTIVITY_FILE = WORK_DIR / "activity.yaml"
-DASHBOARD_URL = "http://127.0.0.1:4096"
+QAREEN_URL = "http://127.0.0.1:4096"
 AOS_REPO = "hishamalhadi/aos"
 MAX_ACTIVITY = 100
 
@@ -316,24 +316,24 @@ def _log_activity(action: str, task_id: str = None, title: str = None,
             finally:
                 fcntl.flock(lf, fcntl.LOCK_UN)
 
-        _notify_dashboard(event)
+        _notify_qareen(event)
     except Exception:
         pass  # Activity log is best-effort
 
 
-def _notify_dashboard(event: dict) -> None:
-    """POST work event to dashboard for instant SSE push. Best-effort."""
+def _notify_qareen(event: dict) -> None:
+    """POST work event to Qareen for instant SSE push. Best-effort."""
     try:
         data = json.dumps(event).encode()
         req = urllib.request.Request(
-            f"{DASHBOARD_URL}/api/work/notify",
+            f"{QAREEN_URL}/api/work/notify",
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         urllib.request.urlopen(req, timeout=1)
     except Exception:
-        pass  # Dashboard may not be running
+        pass  # Qareen may not be running
 
 
 def _gh_create_issue(task_id: str, title: str, priority: int = 3,
@@ -454,7 +454,7 @@ def _on_task_created(task_dict: dict) -> None:
     """Side effects after task creation."""
     _log_activity("task_created", task_dict.get("id"), task_dict.get("title"),
                   task_dict.get("project"))
-    _notify_dashboard({
+    _notify_qareen({
         "action": "task_created",
         "task_id": task_dict.get("id"),
         "title": task_dict.get("title"),
@@ -469,7 +469,7 @@ def _on_task_completed(task_dict: dict) -> None:
     """Side effects after task completion."""
     _log_activity("task_completed", task_dict.get("id"), task_dict.get("title"),
                   task_dict.get("project"))
-    _notify_dashboard({
+    _notify_qareen({
         "action": "task_completed",
         "task_id": task_dict.get("id"),
         "title": task_dict.get("title"),
@@ -1022,14 +1022,14 @@ def get_activity(limit: int = 30) -> list:
 
 
 def notify_initiative_event(action: str, title: str, **kwargs) -> None:
-    """Send an initiative event to the dashboard SSE stream."""
+    """Send an initiative event to the Qareen SSE stream."""
     event = {
         "action": action,
         "title": title,
         "ts": datetime.now().isoformat(),
     }
     event.update(kwargs)
-    _notify_dashboard(event)
+    _notify_qareen(event)
 
 
 # ── Bulk / summary ──────────────────────────────────────

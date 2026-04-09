@@ -16,7 +16,7 @@ You check that everything is running. Your findings are always subject to verifi
 ## Capabilities
 - Check RAM, disk, CPU usage via system commands
 - Verify all LaunchAgents are running
-- Check service health (Listen, Dashboard, Bridge, Transcriber)
+- Check service health (Listen, Qareen, Bridge, Transcriber)
 - Review recent logs for errors
 - Generate health reports
 

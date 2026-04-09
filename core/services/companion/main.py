@@ -31,11 +31,11 @@ capture = AudioCapture()
 _meeting_task: asyncio.Task | None = None
 
 
-# -- SSE stream for dashboard --
+# -- SSE stream for Qareen --
 
 @app.get("/stream")
 async def meeting_stream(request: Request):
-    """SSE stream of meeting events for the dashboard."""
+    """SSE stream of meeting events for Qareen."""
     queue = engine.subscribe()
 
     async def event_generator():
@@ -120,7 +120,7 @@ async def _run_meeting_pipeline():
     Audio flows continuously through the microphone. Silero VAD detects speech
     onset/offset and emits SpeechSegment objects. Each segment is transcribed
     in-process via mlx-whisper (no HTTP round trip). Results stream to the
-    dashboard in real time.
+    Qareen in real time.
     """
     log = logging.getLogger("companion.pipeline")
     log.info("Starting live voice pipeline...")

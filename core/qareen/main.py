@@ -825,6 +825,7 @@ _api_routers = [
     ("qareen.api.executions", "executions"),
     ("qareen.api.ingest", "ingest"),
     ("qareen.api.models", "models"),
+    ("qareen.api.chat", "chat"),
 ]
 
 for module_path, name in _api_routers:

@@ -217,7 +217,7 @@ When asked for the AOS architecture, generate a comprehensive diagram showing:
 
 **Mac Mini Layer:**
 - Bridge (daemon) — connects Telegram ↔ Claude CLI
-- Dashboard (:4096) — web UI
+- Qareen (:4096) — web UI
 - Listen (:7600) — job server
 - Memory (MCP) — ChromaDB semantic search
 

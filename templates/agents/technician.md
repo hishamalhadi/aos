@@ -41,13 +41,13 @@ You are the authority on messaging in this system. When something isn't working 
 ### Services (LaunchAgents)
 - `com.aos.bridge` — the Telegram/Slack bridge (KeepAlive=true)
 - `com.aos.listen` — job server on port 7600
-- `com.aos.dashboard` — dashboard on port 4096
+- `com.aos.qareen` — Qareen on port 4096
 
 ### Logs
 - `logs/bridge.err.log` — bridge errors (primary diagnostic source)
 - `logs/bridge.out.log` — bridge stdout
 - `logs/listen.*.log` — job server logs
-- `logs/dashboard.*.log` — dashboard logs
+- `logs/qareen.*.log` — Qareen logs
 
 ### Secrets (macOS Keychain via `bin/agent-secret`)
 - `TELEGRAM_BOT_TOKEN` — system bridge bot token

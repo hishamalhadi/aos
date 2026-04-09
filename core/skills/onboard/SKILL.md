@@ -424,7 +424,7 @@ get synced every 30 minutes. The vault gets indexed for search. And at 4 AM,
 the system pulls updates automatically."
 
 "If anything fails, Steward catches it. If the machine reboots, the scheduler
-detects it and restarts everything. You can see all of this on your dashboard
+detects it and restarts everything. You can see all of this in Qareen
 under 'Automations'."
 
 ### The Daily Loop
@@ -678,7 +678,7 @@ and run: `bash ~/Downloads/connect-to-aos.sh`"
 
 The script creates:
 - `AOS Terminal.command` on their Desktop — double-click to SSH in
-- `AOS Dashboard.webloc` on their Desktop — opens the dashboard
+- `AOS Qareen.webloc` on their Desktop — opens Qareen
 - SSH config entry — `ssh aos` works from Terminal
 
 **For iPhone:**
@@ -696,7 +696,7 @@ http://{tailscale_ip}:4096
 ```
 
 "Bookmark that — tap Share → Add to Home Screen. You now have your
-dashboard on your phone's home screen."
+Qareen on your phone's home screen."
 
 ### Verify
 
@@ -716,7 +716,7 @@ If works: "You're in. From anywhere in the world — `ssh aos`."
 
 `python3 ~/aos/core/engine/work/cli.py start "your first task"`
 
-### The Dashboard Moment
+### The Qareen Moment
 
 Complete any remaining onboarding tasks:
 ```bash
@@ -726,12 +726,12 @@ python3 ~/aos/core/engine/work/cli.py done "meet the team" 2>/dev/null
 python3 ~/aos/core/engine/work/cli.py done "remote access" 2>/dev/null
 ```
 
-Open the dashboard:
+Open Qareen:
 ```bash
 open "http://localhost:4096"
 ```
 
-"Take a look at your dashboard. See your onboarding project — 5 tasks, all done.
+"Take a look at Qareen. See your onboarding project — 5 tasks, all done.
 That's how the work system tracks everything. Tasks flow from todo to active to done.
 Sessions link to tasks. Patterns compile into scripts. It's all visible here."
 
@@ -754,7 +754,7 @@ python3 ~/aos/core/engine/work/cli.py add "{their task}" --project {relevant_pro
 ```
 
 "Done. Your first task is tracked. You can check on it anytime — just say `/work list`
-or open the dashboard."
+or open Qareen."
 
 ### Bigger Than Tasks — Initiatives
 
@@ -1209,7 +1209,7 @@ Format:
 
 ## Phase 5: First Task
 - Task created: "{title}" in project {project}
-- Dashboard shown: yes
+- Qareen shown: yes
 - Feedback: smooth / confusing / broke
 ```
 

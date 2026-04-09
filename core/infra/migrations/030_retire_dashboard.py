@@ -1,29 +1,59 @@
 """
-Migration 030: Retire the old dashboard service.
+Migration 030: Retire legacy services replaced by Qareen and QMD.
 
-The dashboard (com.aos.dashboard) has been fully replaced by Qareen
-(com.aos.qareen) which runs on the same port 4096. This migration:
+Qareen (com.aos.qareen, port 4096) absorbed these services:
+  - dashboard (:4096) — web UI
+  - eventd (:4097) — event dispatcher
+  - companion (:7603) — voice companion
+  - listen (:7600) — job server
+  - mission-control (:3000) — native Tauri UI
 
-1. Stops and unloads com.aos.dashboard if it's still running
-2. Removes the dashboard plist from ~/Library/LaunchAgents/
-3. Creates the ingest tables in qareen.db (activity, conversations,
+QMD replaced:
+  - memory — workspace semantic search MCP (Claude Code Grep/Glob
+    handles code search; QMD handles knowledge/vault search)
+
+Plus two experimental proxies that never shipped a template:
+  - https-proxy
+  - wss-proxy
+
+This migration:
+1. Stops and unloads all retired LaunchAgents
+2. Removes their plist files from ~/Library/LaunchAgents/
+3. Removes the memory MCP registration from ~/.claude/mcp.json
+4. Creates the ingest tables in qareen.db (activity, conversations,
    sessions) used by the new /api/ingest endpoints
 
-The old dashboard's data in ~/.aos/data/dashboard/activity.db is
-left in place — it's historical and doesn't conflict.
+Historical data (e.g. ~/.aos/data/dashboard/activity.db) is left
+in place — it doesn't conflict.
 """
 
-DESCRIPTION = "Retire old dashboard, create ingest tables in qareen.db"
+DESCRIPTION = "Retire legacy services absorbed by Qareen/QMD, create ingest tables"
 
+import json
 import os
 import sqlite3
 import subprocess
 from pathlib import Path
 
 HOME = Path.home()
-DASHBOARD_PLIST = HOME / "Library" / "LaunchAgents" / "com.aos.dashboard.plist"
-DASHBOARD_LABEL = "com.aos.dashboard"
+LAUNCH_AGENTS_DIR = HOME / "Library" / "LaunchAgents"
 DB_PATH = HOME / ".aos" / "data" / "qareen.db"
+MCP_CONFIG = HOME / ".claude" / "mcp.json"
+
+# All services that have been retired / absorbed by Qareen or QMD
+RETIRED_SERVICES = [
+    "com.aos.dashboard",
+    "com.aos.eventd",
+    "com.aos.companion",
+    "com.aos.listen",
+    "com.aos.mission-control",
+    "com.aos.memory",
+    "com.aos.https-proxy",
+    "com.aos.wss-proxy",
+]
+
+# MCP servers that have been retired
+RETIRED_MCP_SERVERS = ["memory"]
 
 INGEST_SCHEMA = """
 CREATE TABLE IF NOT EXISTS ingest_activity (
@@ -82,22 +112,37 @@ CREATE INDEX IF NOT EXISTS idx_ingest_sess_started
 
 
 def check() -> bool:
-    """Applied if dashboard plist is gone AND ingest tables exist."""
-    if DASHBOARD_PLIST.exists():
-        return False
+    """Applied if all retired plists are gone AND ingest tables exist."""
+    # Any retired plist file still present?
+    for label in RETIRED_SERVICES:
+        if (LAUNCH_AGENTS_DIR / f"{label}.plist").exists():
+            return False
 
-    # Check if dashboard is still loaded in launchctl
+    # Any retired service still loaded in launchctl?
     try:
         result = subprocess.run(
             ["launchctl", "list"],
             capture_output=True, text=True, timeout=5,
         )
-        if DASHBOARD_LABEL in result.stdout:
-            return False
+        for label in RETIRED_SERVICES:
+            if label in result.stdout:
+                return False
     except Exception:
         pass
 
-    # Check if ingest tables exist in qareen.db
+    # Any retired MCP server still registered?
+    if MCP_CONFIG.exists():
+        try:
+            with open(MCP_CONFIG) as f:
+                data = json.load(f)
+            servers = data.get("mcpServers", {})
+            for name in RETIRED_MCP_SERVERS:
+                if name in servers:
+                    return False
+        except Exception:
+            pass
+
+    # Ingest tables exist in qareen.db?
     if DB_PATH.exists():
         try:
             conn = sqlite3.connect(str(DB_PATH))
@@ -114,29 +159,55 @@ def check() -> bool:
 
 
 def apply() -> str:
-    """Stop old dashboard, remove plist, create ingest tables."""
+    """Stop all retired services, remove plists, create ingest tables."""
     actions = []
     uid = os.getuid()
 
-    # 1. Stop the old dashboard if running
+    # 1. Stop and remove all retired services
     try:
         result = subprocess.run(
             ["launchctl", "list"],
             capture_output=True, text=True, timeout=5,
         )
-        if DASHBOARD_LABEL in result.stdout:
-            subprocess.run(
-                ["launchctl", "bootout", f"gui/{uid}/{DASHBOARD_LABEL}"],
-                capture_output=True, timeout=10,
-            )
-            actions.append(f"Stopped {DASHBOARD_LABEL}")
-    except Exception as e:
-        actions.append(f"Could not stop dashboard: {e}")
+        loaded_services = result.stdout
+    except Exception:
+        loaded_services = ""
 
-    # 2. Remove the plist
-    if DASHBOARD_PLIST.exists():
-        DASHBOARD_PLIST.unlink()
-        actions.append(f"Removed {DASHBOARD_PLIST}")
+    for label in RETIRED_SERVICES:
+        # Bootout if loaded
+        if label in loaded_services:
+            try:
+                subprocess.run(
+                    ["launchctl", "bootout", f"gui/{uid}/{label}"],
+                    capture_output=True, timeout=10,
+                )
+                actions.append(f"Stopped {label}")
+            except Exception as e:
+                actions.append(f"Could not stop {label}: {e}")
+
+        # Remove plist
+        plist = LAUNCH_AGENTS_DIR / f"{label}.plist"
+        if plist.exists():
+            plist.unlink()
+            actions.append(f"Removed {plist.name}")
+
+    # 2. Remove retired MCP servers from ~/.claude/mcp.json
+    if MCP_CONFIG.exists():
+        try:
+            with open(MCP_CONFIG) as f:
+                data = json.load(f)
+            servers = data.get("mcpServers", {})
+            removed = []
+            for name in RETIRED_MCP_SERVERS:
+                if name in servers:
+                    del servers[name]
+                    removed.append(name)
+            if removed:
+                with open(MCP_CONFIG, "w") as f:
+                    json.dump(data, f, indent=2)
+                actions.append(f"Removed MCP servers: {', '.join(removed)}")
+        except Exception as e:
+            actions.append(f"MCP cleanup failed: {e}")
 
     # 3. Create ingest tables in qareen.db
     if DB_PATH.exists():

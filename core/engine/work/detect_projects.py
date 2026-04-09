@@ -14,7 +14,7 @@ Output: list of suggested projects with evidence, or auto-create if configured.
 Usage:
     python3 detect_projects.py              # Print suggestions
     python3 detect_projects.py --apply      # Create missing projects in work.yaml
-    python3 detect_projects.py --json       # JSON output for dashboard API
+    python3 detect_projects.py --json       # JSON output for Qareen API
 """
 
 import getpass

@@ -1,7 +1,7 @@
 """Bridge API — SSE stream + message endpoint for Mission Control.
 
 Runs as a background task inside the bridge's asyncio loop.
-Localhost only, no auth (same security model as dashboard :4096).
+Localhost only, no auth (same security model as Qareen :4096).
 
 Endpoints:
     GET  /stream   — SSE stream of live conversation events

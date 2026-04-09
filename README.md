@@ -52,7 +52,7 @@ The filesystem is persistent memory. CLAUDE.md files are the kernel. Agents are 
 ## The Stack
 
 ```
-INTERFACE ──── Telegram  ·  Dashboard  ·  CLI  ·  Mobile
+INTERFACE ──── Telegram  ·  Qareen  ·  CLI  ·  Mobile
      |
 AGENTS ─────── Chief  ·  Steward  ·  Advisor  ·  User agents
      |
@@ -60,7 +60,7 @@ WORK ────────── Goals  ·  Tasks  ·  Inbox  ·  Reviews
      |
 KNOWLEDGE ──── Vault  ·  Search  ·  Sessions  ·  Patterns
      |
-SERVICES ───── Bridge  ·  Dashboard  ·  Listen  ·  Memory
+SERVICES ───── Bridge  ·  Qareen  ·  Listen  ·  Memory
      |
 HARNESS ────── CLAUDE.md  ·  Agents  ·  Skills  ·  Hooks
      |
@@ -124,7 +124,7 @@ Always-on processes via LaunchAgents. Survive reboots. Localhost-only.
 | Service | What | Port |
 |:--------|:-----|:-----|
 | **Bridge** | Telegram messaging, voice transcription, Claude dispatch | daemon |
-| **Dashboard** | Web UI — activity feed, work, agents, sessions, logs | `:4096` |
+| **Qareen** | Web UI — activity feed, work, agents, sessions, logs | `:4096` |
 | **Listen** | Background job server with Claude Code workers | `:7600` |
 | **Memory** | Semantic search via ChromaDB (MCP server) | stdio |
 
@@ -167,7 +167,7 @@ Four boundaries. Never crossed.
 ~/aos/
 ├── core/
 │   ├── agents/            System agent definitions
-│   ├── services/          Bridge, dashboard, listen, memory
+│   ├── services/          Bridge, qareen, listen, memory
 │   ├── integrations/      Telegram, WhatsApp, email, etc.
 │   ├── work/              Work engine (parser, query, metrics)
 │   └── bin/               Utilities

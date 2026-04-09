@@ -41,8 +41,8 @@ INTENTS = {
             "system status",
             "service status",
             "health check",
-            "re:is the (dashboard|bridge|listen|transcriber|whatsapp)\\s*(running|up|working|broken|down)",
-            "re:check (the )?(dashboard|bridge|listen|transcriber|whatsapp|services|system)",
+            "re:is the (qareen|bridge|listen|transcriber|whatsapp)\\s*(running|up|working|broken|down)",
+            "re:check (the )?(qareen|bridge|listen|transcriber|whatsapp|services|system)",
             "re:is .+ (broken|down|dead|crashed)",
             "anything down",
             "anything broken",
@@ -271,7 +271,7 @@ def classify(text: str) -> tuple[str | None, str | None]:
 def handle_health_check(text: str) -> str:
     """Check service health endpoints."""
     services = [
-        ("Dashboard", "http://127.0.0.1:4096/api/health"),
+        ("Qareen", "http://127.0.0.1:4096/api/health"),
         ("Listen", "http://127.0.0.1:7600/health"),
         ("Transcriber", "http://127.0.0.1:7601/health"),
         ("WhatsApp", "http://127.0.0.1:7601/health"),

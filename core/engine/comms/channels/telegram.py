@@ -24,8 +24,6 @@ from ..channel import ChannelAdapter
 from ..models import Conversation, Message
 
 QUEUE_PATH = Path.home() / ".aos" / "data" / "telegram-messages.jsonl"
-# Bridge health endpoint (dashboard proxies bridge status)
-DASHBOARD_URL = "http://127.0.0.1:4096"
 
 
 class TelegramAdapter(ChannelAdapter):

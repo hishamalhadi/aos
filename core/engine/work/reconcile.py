@@ -114,7 +114,7 @@ def main():
     # ── Case 2: No active task — check for untracked work ──
     if files_modified:
         _log(f"[untracked] {len(files_modified)} files modified with no active task: {', '.join(Path(f).name for f in files_modified[:5])}")
-        # Log to activity so dashboard can surface it
+        # Log to activity so Qareen can surface it
         try:
             engine._log_activity(
                 "session_untracked",

@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// HTTP client for the AOS dashboard API (localhost:4096)
+// HTTP client for the Qareen API (localhost:4096)
 // ---------------------------------------------------------------------------
 
 const API_BASE = "http://localhost:4096/api";
