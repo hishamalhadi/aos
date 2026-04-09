@@ -34,6 +34,8 @@ def _build_db(path: Path, *, include_social: bool = True,
     conn = sqlite3.connect(str(path))
     c = conn.cursor()
 
+    # Mirror the real modern macOS schema: ZNOTE is an INTEGER flag in
+    # ZABCDRECORD; the actual note text lives in ZABCDNOTE(ZCONTACT, ZTEXT).
     c.execute(
         """CREATE TABLE ZABCDRECORD (
             Z_PK INTEGER PRIMARY KEY,
@@ -41,9 +43,16 @@ def _build_db(path: Path, *, include_social: bool = True,
             ZLASTNAME TEXT,
             ZORGANIZATION TEXT,
             ZJOBTITLE TEXT,
-            ZNOTE TEXT,
+            ZNOTE INTEGER,
             ZBIRTHDAY REAL,
             ZCREATIONDATE REAL
+        )"""
+    )
+    c.execute(
+        """CREATE TABLE ZABCDNOTE (
+            Z_PK INTEGER PRIMARY KEY,
+            ZCONTACT INTEGER,
+            ZTEXT TEXT
         )"""
     )
     c.execute(
@@ -67,7 +76,7 @@ def _build_db(path: Path, *, include_social: bool = True,
             Z_PK INTEGER PRIMARY KEY,
             ZOWNER INTEGER,
             ZCITY TEXT,
-            ZCOUNTRY TEXT,
+            ZCOUNTRYNAME TEXT,
             ZSTREET TEXT,
             ZLABEL TEXT
         )"""
@@ -96,7 +105,7 @@ def _build_db(path: Path, *, include_social: bool = True,
             """CREATE TABLE ZABCDSOCIALPROFILE (
                 Z_PK INTEGER PRIMARY KEY,
                 ZOWNER INTEGER,
-                ZSERVICE TEXT,
+                ZSERVICENAME TEXT,
                 ZUSERNAME TEXT
             )"""
         )
@@ -123,12 +132,17 @@ def _build_db(path: Path, *, include_social: bool = True,
         "(Z_PK, ZFIRSTNAME, ZLASTNAME, ZORGANIZATION, ZJOBTITLE, ZNOTE, "
         "ZBIRTHDAY, ZCREATIONDATE) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         [
-            (1, "Alice", "Smith", "Acme Corp", "Engineer",
-             "Met at conference 2019. Loves hiking.", alice_birthday, alice_created),
-            (2, "Bob", "Jones", None, None, None, None, None),
-            (3, "Carol", "Anderson", None, None, None, None, None),
-            (4, "Carol", "Bennett", None, None, None, None, None),
+            # ZNOTE is now an INTEGER flag (1 = has note, 0 = no note).
+            # Real text goes into ZABCDNOTE below.
+            (1, "Alice", "Smith", "Acme Corp", "Engineer", 1, alice_birthday, alice_created),
+            (2, "Bob", "Jones", None, None, 0, None, None),
+            (3, "Carol", "Anderson", None, None, 0, None, None),
+            (4, "Carol", "Bennett", None, None, 0, None, None),
         ],
+    )
+    c.execute(
+        "INSERT INTO ZABCDNOTE (ZCONTACT, ZTEXT) VALUES (?, ?)",
+        (1, "Met at conference 2019. Loves hiking."),
     )
 
     # Phones
@@ -154,7 +168,7 @@ def _build_db(path: Path, *, include_social: bool = True,
     # Postal
     c.execute(
         "INSERT INTO ZABCDPOSTALADDRESS "
-        "(ZOWNER, ZCITY, ZCOUNTRY, ZSTREET, ZLABEL) VALUES (?, ?, ?, ?, ?)",
+        "(ZOWNER, ZCITY, ZCOUNTRYNAME, ZSTREET, ZLABEL) VALUES (?, ?, ?, ?, ?)",
         (1, "Brooklyn", "USA", "123 Main St", "home"),
     )
 
@@ -172,7 +186,7 @@ def _build_db(path: Path, *, include_social: bool = True,
 
     if include_social:
         c.execute(
-            "INSERT INTO ZABCDSOCIALPROFILE (ZOWNER, ZSERVICE, ZUSERNAME) "
+            "INSERT INTO ZABCDSOCIALPROFILE (ZOWNER, ZSERVICENAME, ZUSERNAME) "
             "VALUES (?, ?, ?)",
             (1, "twitter", "@alice"),
         )
