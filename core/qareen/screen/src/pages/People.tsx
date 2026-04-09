@@ -7,7 +7,7 @@ import {
   Cake, Handshake, Link2, Download, Check, Loader2, Smartphone, Globe,
   Send, ChevronDown, ChevronUp, ShieldCheck,
 } from 'lucide-react';
-import { usePeople, usePerson, usePersonSurfaces, usePersonMessages, useSendMessage, useRecentActivity, useRelationshipGraph } from '@/hooks/usePeople';
+import { usePeople, usePerson, usePersonSurfaces, usePersonMessages, useSendMessage, useRecentActivity, useRelationshipGraph, usePersonClassification } from '@/hooks/usePeople';
 import type { RecentActivityItem, GraphNode, GraphEdge } from '@/hooks/usePeople';
 import { EmptyState } from '@/components/primitives/EmptyState';
 import { Tag, type TagColor } from '@/components/primitives/Tag';
@@ -19,6 +19,10 @@ import GraphExplorer from '@/components/people/GraphExplorer';
 import FamilyTree from '@/components/people/FamilyTree';
 import OrgChart from '@/components/people/OrgChart';
 import HygienePanel, { HygieneBadge } from '@/components/people/HygienePanel';
+// Phase 4 — people intelligence
+import TierStrip from '@/components/people/TierStrip';
+import PersonProfilePanel from '@/components/people/PersonProfilePanel';
+import ClassificationCorrector from '@/components/people/ClassificationCorrector';
 import type { PersonResponse, PersonSurfaceItem, RelationshipSchema, ChannelMessage, ChannelPresence } from '@/lib/types';
 
 // ---------------------------------------------------------------------------
@@ -483,6 +487,9 @@ function PersonDetail({ id, onClose }: { id: string; onClose: () => void }) {
   const [composeChannel, setComposeChannel] = useState<string>('');
   const [composeText, setComposeText] = useState('');
   const [detailTab, setDetailTab] = useState<'messages' | 'info'>('messages');
+  // Phase 4 — classification corrector toggle
+  const [showCorrector, setShowCorrector] = useState(false);
+  const { data: classification } = usePersonClassification(id);
 
   if (isLoading || !person) {
     return (
@@ -634,6 +641,30 @@ function PersonDetail({ id, onClose }: { id: string; onClose: () => void }) {
           </div>
         ) : (
           <div className="px-6 py-5 space-y-6">
+            {/* Phase 4 — compiled profile + classification */}
+            <PersonProfilePanel personId={id} />
+
+            {/* Phase 4 — correct classification (collapsible) */}
+            <div>
+              <button
+                onClick={() => setShowCorrector(v => !v)}
+                className="text-[11px] font-[510] text-text-tertiary hover:text-text-secondary cursor-pointer transition-colors"
+                style={{ transitionDuration: 'var(--duration-instant)' }}
+              >
+                {showCorrector ? 'Cancel correction' : 'Correct classification…'}
+              </button>
+              {showCorrector && (
+                <div className="mt-3">
+                  <ClassificationCorrector
+                    personId={id}
+                    currentTier={(classification as any)?.tier || 'unknown'}
+                    currentTags={(classification as any)?.context_tags || []}
+                    onSaved={() => setShowCorrector(false)}
+                  />
+                </div>
+              )}
+            </div>
+
             {channels.length > 0 && (
               <div>
                 <SectionHeader label="Channels" />
@@ -714,6 +745,8 @@ export default function PeoplePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [activeView, setActiveView] = useState('feed');
   const [showHygiene, setShowHygiene] = useState(false);
+  // Phase 4 — tier filter state (TierStrip click-to-filter)
+  const [selectedTier, setSelectedTier] = useState<string | null>(null);
   const { data, isLoading, isError } = usePeople();
   const allPeople = data?.people ?? [];
 
@@ -761,6 +794,9 @@ export default function PeoplePage() {
             <HygieneBadge onClick={() => setShowHygiene(true)} />
           </div>
         </div>
+
+        {/* Phase 4 — tier distribution strip with click-to-filter */}
+        <TierStrip selectedTier={selectedTier} onSelectTier={setSelectedTier} />
 
         {/* Feed view — original content */}
         {activeView === 'feed' && (

@@ -452,3 +452,117 @@ export function useRunHygieneScan() {
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// People Intelligence — Phase 4 classification + profile
+// ---------------------------------------------------------------------------
+
+// Aggregate tier distribution across all people
+export function useIntelTiers() {
+  return useQuery({
+    queryKey: ['intelTiers'],
+    queryFn: async (): Promise<{ tiers: Record<string, number> }> => {
+      const res = await fetch(`${API}/people/intel/tiers`);
+      if (!res.ok) throw new Error(`Intel tiers error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+}
+
+// Extractor / adapter coverage report
+export function useIntelCoverage() {
+  return useQuery({
+    queryKey: ['intelCoverage'],
+    queryFn: async () => {
+      const res = await fetch(`${API}/people/intel/coverage`);
+      if (!res.ok) throw new Error(`Intel coverage error: ${res.status}`);
+      return res.json();
+    },
+    staleTime: 5 * 60_000,
+  });
+}
+
+// Compiled PersonProfile for one person
+export function usePersonProfile(id: string | null) {
+  return useQuery({
+    queryKey: ['personProfile', id],
+    queryFn: async () => {
+      if (!id) return null;
+      const res = await fetch(`${API}/people/${encodeURIComponent(id)}/profile`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Profile error: ${res.status}`);
+      return res.json();
+    },
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+}
+
+// Active classification for one person
+export function usePersonClassification(id: string | null) {
+  return useQuery({
+    queryKey: ['personClassification', id],
+    queryFn: async () => {
+      if (!id) return null;
+      const res = await fetch(`${API}/people/${encodeURIComponent(id)}/classification`);
+      if (res.status === 404) return null;
+      if (!res.ok) throw new Error(`Classification error: ${res.status}`);
+      return res.json();
+    },
+    enabled: !!id,
+    staleTime: 60_000,
+  });
+}
+
+// Record an operator correction to a classification
+export function useCorrectClassification() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (params: {
+      person_id: string;
+      tier?: string;
+      context_tags?: Array<{ tag: string; confidence: number }>;
+      notes?: string;
+    }) => {
+      const { person_id, ...body } = params;
+      const res = await fetch(`${API}/people/${encodeURIComponent(person_id)}/classification/correct`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`Correction failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: (_, params) => {
+      qc.invalidateQueries({ queryKey: ['personClassification', params.person_id] });
+      qc.invalidateQueries({ queryKey: ['intelTiers'] });
+    },
+  });
+}
+
+// Run the classification pipeline
+export function useRunClassify() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      person_ids?: string[];
+      limit?: number;
+      with_llm?: boolean;
+      dry_run?: boolean;
+      max_budget_usd?: number;
+    }) => {
+      const res = await fetch(`${API}/people/intel/classify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error(`Classification failed: ${res.status}`);
+      return res.json();
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['intelTiers'] });
+      qc.invalidateQueries({ queryKey: ['personClassification'] });
+    },
+  });
+}
