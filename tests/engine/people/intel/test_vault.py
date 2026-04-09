@@ -46,11 +46,11 @@ def _make_vault(tmp_path: Path) -> Path:
 # ── Helper-function tests ───────────────────────────────────────────────
 
 def test_name_variants_camelcase_split() -> None:
-    assert sorted(_name_variants("AliNaqvi")) == sorted(["AliNaqvi", "Ali Naqvi"])
+    assert sorted(_name_variants("SamTaylor")) == sorted(["SamTaylor", "Sam Taylor"])
 
 
 def test_name_variants_spaced_unchanged() -> None:
-    assert _name_variants("Ali Naqvi") == ["Ali Naqvi"]
+    assert _name_variants("Sam Taylor") == ["Sam Taylor"]
 
 
 def test_name_variants_empty() -> None:
@@ -180,7 +180,7 @@ def test_skips_short_names(tmp_path: Path) -> None:
     log.mkdir(parents=True)
     _write(log / "2026-03-02.md", "Talked to Ali today.")
     adapter = VaultAdapter(vault_root=str(root))
-    out = adapter.extract_all({"p1": {"name": "Ali"}})
+    out = adapter.extract_all({"p1": {"name": "Sam"}})
     assert out == {}
 
 
@@ -289,30 +289,30 @@ def test_multiple_variants_dont_double_count(tmp_path: Path) -> None:
     root = tmp_path / "vault"
     log = root / "log"
     log.mkdir(parents=True)
-    # Body has one "AliNaqvi" and one "Ali Naqvi" — two distinct textual
+    # Body has one "SamTaylor" and one "Sam Taylor" — two distinct textual
     # mentions. Both variants regex-match, but each match lives at a
     # unique offset. Dedup by (start, end) should give exactly 2.
-    _write(log / "2026-05-01.md", "AliNaqvi dropped by. Later Ali Naqvi called.")
+    _write(log / "2026-05-01.md", "SamTaylor dropped by. Later Sam Taylor called.")
     adapter = VaultAdapter(vault_root=str(root))
-    out = adapter.extract_all({"p1": {"name": "AliNaqvi"}})
+    out = adapter.extract_all({"p1": {"name": "SamTaylor"}})
     assert "p1" in out
     m = out["p1"].mentions[0]
-    # "AliNaqvi" matches once (the camelCase occurrence). "Ali Naqvi"
+    # "SamTaylor" matches once (the camelCase occurrence). "Sam Taylor"
     # matches once (the spaced occurrence). They don't overlap → 2.
     assert m.total_mentions == 2
 
 
 def test_variant_dedup_same_span(tmp_path: Path) -> None:
     # When only ONE textual mention exists, the two variants must not
-    # each increment the counter. "Ali Naqvi" appears once; both
-    # variants ["AliNaqvi", "Ali Naqvi"] are compiled, but only the
+    # each increment the counter. "Sam Taylor" appears once; both
+    # variants ["SamTaylor", "Sam Taylor"] are compiled, but only the
     # spaced variant matches — count must be 1.
     root = tmp_path / "vault"
     log = root / "log"
     log.mkdir(parents=True)
-    _write(log / "2026-06-01.md", "Ali Naqvi is the only mention here.")
+    _write(log / "2026-06-01.md", "Sam Taylor is the only mention here.")
     adapter = VaultAdapter(vault_root=str(root))
-    out = adapter.extract_all({"p1": {"name": "AliNaqvi"}})
+    out = adapter.extract_all({"p1": {"name": "SamTaylor"}})
     m = out["p1"].mentions[0]
     assert m.total_mentions == 1
 

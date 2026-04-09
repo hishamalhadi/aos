@@ -35,7 +35,7 @@ Matching strategy — try in order:
    match ``from_user.id`` (compared as a string).
 2. Full name — ``"{first} {last}".strip().lower()`` matches
    ``person_index[pid]["name"].lower()``. Also try a space-split variant so
-   camelCase canonical names (``AliNaqvi``) match ``first="Ali" last="Naqvi"``.
+   camelCase canonical names (``SamTaylor``) match ``first="Sam" last="Taylor"``.
 3. Username — ``from_user.username`` matches ``person_index[pid]
    ["telegram_usernames"]`` if that list is present.
 
@@ -106,8 +106,8 @@ def _name_variants(name: str | None) -> list[str]:
     """Return lowercase name variants for fuzzy full-name matching.
 
     The raw name and a space-split variant (inserting spaces at lower->upper
-    capital boundaries) are both returned. This lets ``AliNaqvi`` match a
-    Telegram user with first_name ``Ali`` and last_name ``Naqvi``.
+    capital boundaries) are both returned. This lets ``SamTaylor`` match a
+    Telegram user with first_name ``Sam`` and last_name ``Taylor``.
     """
     cleaned = (name or "").strip()
     if not cleaned:

@@ -10,12 +10,12 @@ Two sub-sources are scanned:
   - Session exports: ~/vault/log/sessions/*.md       (capped at 50 newest)
 
 Matching is name-based. The `name` field in people.db can be either a
-spaced canonical name ("Ali Naqvi") or a concatenated camelCase token
-("AliNaqvi"). We build both variants and match each as a word-boundary
+spaced canonical name ("Sam Taylor") or a concatenated camelCase token
+("SamTaylor"). We build both variants and match each as a word-boundary
 regex. Overlapping matches between variants at the same file offset are
 deduplicated so we don't double-count a single real mention.
 
-Short or stopword-like names are skipped entirely — "Ali", "Love", "Home"
+Short or stopword-like names are skipped entirely — "Sam", "Love", "Home"
 would produce too much noise. Callers should pre-filter with higher-
 confidence names where possible, but this layer guarantees a baseline.
 
@@ -57,8 +57,8 @@ _DAILY_RE = re.compile(r"^202\d-.+\.md$")
 def _name_variants(name: str) -> list[str]:
     """Return the name itself and a space-separated camelCase split.
 
-    "AliNaqvi" → ["AliNaqvi", "Ali Naqvi"]
-    "Ali Naqvi" → ["Ali Naqvi"]
+    "SamTaylor" → ["SamTaylor", "Sam Taylor"]
+    "Sam Taylor" → ["Sam Taylor"]
     """
     name = (name or "").strip()
     if not name:
