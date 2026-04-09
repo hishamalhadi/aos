@@ -2492,3 +2492,193 @@ async def get_person_intel(person_id: str = Path(...)) -> JSONResponse:
             status_code=500,
             content={"error": "intel lookup failed", "detail": str(e)},
         )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase 4 endpoints — profile / classify / tiers / correct
+#
+# Wraps ProfileBuilder + ClassifierRunner behind HTTP. Same try/except
+# isolation pattern as the Phase 3 intel endpoints — a runtime error
+# in the Phase 4 subsystem must NEVER brick the rest of /api/people.
+# ─────────────────────────────────────────────────────────────────────
+
+
+class IntelClassifyRequest(BaseModel):
+    """POST /api/people/intel/classify body."""
+
+    person_ids: list[str] | None = Field(
+        default=None,
+        description="Optional person IDs to classify. None = all with stored signals.",
+    )
+    limit: int | None = Field(
+        default=None,
+        description="Optional cap on persons classified.",
+        ge=1,
+    )
+    with_llm: bool = Field(
+        default=False,
+        description="Enable LLM context tagging. Default: rule-only.",
+    )
+    max_budget_usd: float = Field(
+        default=1.00,
+        description="USD budget cap for LLM runs. Ignored for rule-only.",
+        ge=0.0,
+    )
+    dry_run: bool = Field(
+        default=False,
+        description="Compile profiles + prompts without LLM calls or persistence.",
+    )
+    model: str | None = Field(
+        default=None,
+        description="Override LLM model. Default: operator preferred execution model.",
+    )
+
+
+class IntelCorrectionRequest(BaseModel):
+    """POST /api/people/{id}/classification/correct body."""
+
+    tier: str | None = Field(
+        default=None,
+        description="New tier value (core, active, fading, dormant, ...).",
+    )
+    context_tags: list[dict] | None = Field(
+        default=None,
+        description="New context tags as list of {tag, confidence}.",
+    )
+    notes: str = Field(default="", description="Operator free-text notes.")
+
+
+def _intel_classifier_runner():
+    """Lazy import so a missing intel subsystem never breaks /api/people."""
+    from core.engine.people.intel.runner import ClassifierRunner
+    return ClassifierRunner()
+
+
+def _intel_profile_builder():
+    from core.engine.people.intel.profiler import ProfileBuilder
+    return ProfileBuilder()
+
+
+@router.get("/intel/tiers")
+async def get_intel_tier_distribution() -> JSONResponse:
+    """Aggregate classification tier distribution (counts only, no names)."""
+    try:
+        runner = _intel_classifier_runner()
+        return JSONResponse(content={"tiers": runner.tier_distribution()})
+    except Exception as e:
+        logger.exception("intel tiers failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "intel subsystem unavailable", "detail": str(e)},
+        )
+
+
+@router.post("/intel/classify")
+async def run_intel_classify(body: IntelClassifyRequest) -> JSONResponse:
+    """Run the classification pipeline and return a summary report.
+
+    Synchronous; large runs may take several seconds. Wrap in
+    asyncio.to_thread if latency becomes an issue.
+    """
+    try:
+        runner = _intel_classifier_runner()
+        report = await runner.run(
+            person_ids=body.person_ids,
+            limit=body.limit,
+            with_llm=body.with_llm,
+            max_budget_usd=body.max_budget_usd,
+            dry_run=body.dry_run,
+            llm_model=body.model,
+        )
+        return JSONResponse(content=report.to_dict())
+    except Exception as e:
+        logger.exception("intel classify failed")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "classification failed", "detail": str(e)},
+        )
+
+
+@router.get("/{person_id}/profile")
+async def get_person_profile(person_id: str = Path(...)) -> JSONResponse:
+    """Return the compiled PersonProfile for one person (explicit opt-in)."""
+    try:
+        builder = _intel_profile_builder()
+        profile = builder.build(person_id)
+        if profile is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "no profile — no stored signals for this person"},
+            )
+        from dataclasses import asdict
+
+        return JSONResponse(content=asdict(profile))
+    except Exception as e:
+        logger.exception("intel profile failed for %s", person_id)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "profile lookup failed", "detail": str(e)},
+        )
+
+
+@router.get("/{person_id}/classification")
+async def get_person_classification(person_id: str = Path(...)) -> JSONResponse:
+    """Return the current classification for one person."""
+    try:
+        runner = _intel_classifier_runner()
+        result = runner.get_classification(person_id)
+        if result is None:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "no classification stored for this person"},
+            )
+        return JSONResponse(content=result.to_dict())
+    except Exception as e:
+        logger.exception("intel classification lookup failed for %s", person_id)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "classification lookup failed", "detail": str(e)},
+        )
+
+
+@router.post("/{person_id}/classification/correct")
+async def correct_person_classification(
+    person_id: str,
+    body: IntelCorrectionRequest,
+) -> JSONResponse:
+    """Record an operator correction to a person's classification."""
+    try:
+        from core.engine.people.intel.taxonomy import Tier
+
+        new_tier: Tier | None = None
+        if body.tier:
+            new_tier = Tier.from_str(body.tier)
+            if new_tier == Tier.UNKNOWN and body.tier.strip().lower() != "unknown":
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "unknown tier",
+                        "detail": f"valid tiers: {[t.value for t in Tier]}",
+                    },
+                )
+
+        if new_tier is None and not body.context_tags:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "at least one of tier or context_tags must be set"},
+            )
+
+        runner = _intel_classifier_runner()
+        result = runner.record_correction(
+            person_id,
+            new_tier=new_tier,
+            new_tags=body.context_tags,
+            notes=body.notes or "",
+        )
+        return JSONResponse(content=result.to_dict())
+    except Exception as e:
+        logger.exception("intel correction failed for %s", person_id)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "correction failed", "detail": str(e)},
+        )
