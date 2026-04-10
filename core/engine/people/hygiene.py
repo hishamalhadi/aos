@@ -18,7 +18,13 @@ from typing import Any
 
 from rapidfuzz import fuzz
 
-from .normalize import normalize_email, normalize_name, normalize_phone
+from .normalize import (
+    double_metaphone_key,
+    normalize_email,
+    normalize_name,
+    normalize_phone,
+    phonetic_key,
+)
 
 # ---------------------------------------------------------------------------
 # Name splitting (Phase 6.1 — canonical name hygiene)
@@ -264,6 +270,159 @@ class HygieneEngine:
                     })
 
         return issues
+
+    def batch_dedup(self) -> dict[str, int]:
+        """Run a comprehensive dedup pass using phonetic blocking + identifier matching.
+
+        Uses Double Metaphone and Arabic phonetic groups as blocking keys,
+        then scores candidate pairs with identifier overlap + name similarity.
+        Results are inserted into the hygiene_queue for review or auto-merge.
+
+        Returns {candidates: N, auto_merged: N, queued_for_review: N}.
+        """
+        stats = {"candidates": 0, "auto_merged": 0, "queued_for_review": 0}
+        now = _now()
+
+        # Build person index: id -> {name, phonetic, metaphone, phones, emails, wa_jids}
+        people = self.conn.execute(
+            "SELECT id, canonical_name FROM people WHERE is_archived = 0 AND is_self = 0"
+        ).fetchall()
+
+        index: dict[str, dict] = {}
+        for p in people:
+            pid, name = p["id"], p["canonical_name"]
+            index[pid] = {
+                "name": name,
+                "phonetic": phonetic_key(name),
+                "metaphone": double_metaphone_key(name),
+                "phones": set(),
+                "emails": set(),
+                "wa_jids": set(),
+            }
+
+        # Load identifiers
+        idents = self.conn.execute(
+            "SELECT person_id, type, value FROM person_identifiers"
+        ).fetchall()
+        for ident in idents:
+            pid = ident["person_id"]
+            if pid not in index:
+                continue
+            val = (ident["value"] or "").strip().lower()
+            if ident["type"] == "phone":
+                # Normalize to last 8 digits for matching
+                digits = re.sub(r"[^\d]", "", val)
+                if len(digits) >= 8:
+                    index[pid]["phones"].add(digits[-8:])
+            elif ident["type"] == "email":
+                index[pid]["emails"].add(val)
+            elif ident["type"] == "wa_jid":
+                index[pid]["wa_jids"].add(val)
+
+        # Build blocking groups: metaphone key -> set of person_ids
+        blocks: dict[str, set[str]] = {}
+        for pid, data in index.items():
+            for key in (data["phonetic"], data["metaphone"]):
+                if key and len(key) > 2:
+                    blocks.setdefault(key, set()).add(pid)
+
+        # Score candidate pairs within each block
+        seen_pairs: set[tuple[str, str]] = set()
+        candidates: list[dict] = []
+
+        for _block_key, pid_set in blocks.items():
+            pids = sorted(pid_set)
+            if len(pids) < 2 or len(pids) > 50:
+                continue  # Skip huge blocks (common names like "ahmad")
+
+            for i in range(len(pids)):
+                for j in range(i + 1, len(pids)):
+                    pair = tuple(sorted([pids[i], pids[j]]))
+                    if pair in seen_pairs:
+                        continue
+                    seen_pairs.add(pair)
+
+                    a, b = index[pids[i]], index[pids[j]]
+                    score = 0.0
+                    reasons = []
+
+                    # Shared phone (strongest signal)
+                    shared_phones = a["phones"] & b["phones"]
+                    if shared_phones:
+                        score += 0.50
+                        reasons.append(f"shared phone suffix: {list(shared_phones)[0]}")
+
+                    # Shared email
+                    shared_emails = a["emails"] & b["emails"]
+                    if shared_emails:
+                        score += 0.45
+                        reasons.append(f"shared email: {list(shared_emails)[0]}")
+
+                    # Shared WhatsApp JID
+                    shared_wa = a["wa_jids"] & b["wa_jids"]
+                    if shared_wa:
+                        score += 0.45
+                        reasons.append(f"shared wa_jid: {list(shared_wa)[0]}")
+
+                    # Name similarity (only if first names also match)
+                    name_score = fuzz.token_sort_ratio(a["name"], b["name"])
+                    if name_score >= 90:
+                        # Check first names specifically to avoid "Saad Tariq" vs "Sana Tariq"
+                        a_first = a["name"].split()[0] if a["name"] else ""
+                        b_first = b["name"].split()[0] if b["name"] else ""
+                        first_score = fuzz.ratio(a_first, b_first)
+                        if first_score >= 80:
+                            score += 0.30 * (name_score / 100.0)
+                            reasons.append(f"name match: {name_score}%")
+                        else:
+                            # Same last name, different first name — not a match
+                            score += 0.05
+                            reasons.append(f"same surname only: {name_score}%")
+
+                    if score >= 0.50:
+                        candidates.append({
+                            "person_a_id": pair[0],
+                            "person_b_id": pair[1],
+                            "confidence": min(score, 1.0),
+                            "reason": "; ".join(reasons),
+                        })
+
+        stats["candidates"] = len(candidates)
+
+        # Process candidates
+        for c in candidates:
+            has_shared_id = any(
+                "shared phone" in c["reason"] or
+                "shared email" in c["reason"] or
+                "shared wa_jid" in c["reason"]
+                for _ in [1]
+            )
+
+            if c["confidence"] >= 0.90 and has_shared_id:
+                # Auto-merge
+                try:
+                    self.merge(c["person_a_id"], c["person_b_id"])
+                    self.conn.commit()
+                    stats["auto_merged"] += 1
+                except Exception as e:
+                    logger.warning("batch_dedup auto-merge failed: %s", e)
+            elif c["confidence"] >= 0.50:
+                # Queue for review
+                qid = _gen_id("hq")
+                try:
+                    self.conn.execute(
+                        """INSERT OR IGNORE INTO hygiene_queue
+                           (id, action_type, person_a_id, person_b_id, confidence, reason, status, created_at)
+                           VALUES (?, 'merge', ?, ?, ?, ?, 'pending', ?)""",
+                        (qid, c["person_a_id"], c["person_b_id"],
+                         round(c["confidence"], 2), c["reason"], now),
+                    )
+                    stats["queued_for_review"] += 1
+                except sqlite3.IntegrityError:
+                    pass  # Already queued
+
+        self.conn.commit()
+        return stats
 
     def scan_ghosts(self) -> list[dict[str, Any]]:
         """Find people that are likely junk imports: no interactions, no metadata, single identifier."""

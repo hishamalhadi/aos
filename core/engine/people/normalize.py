@@ -295,3 +295,29 @@ def phonetic_key(name: str) -> str:
     """
     words = name.lower().split()
     return " ".join(_PHONETIC_REVERSE.get(w, w) for w in words)
+
+
+def double_metaphone_key(name: str) -> str:
+    """Return a Double Metaphone blocking key for a name.
+
+    Uses the ``metaphone`` library to produce phonetic codes that handle
+    Western names, non-Arabic transliterations, and spelling variations
+    (e.g., "Catherine" vs "Katherine", "Steven" vs "Stephen").
+
+    Complements :func:`phonetic_key` which handles Arabic-specific variants.
+
+    Returns the primary metaphone code for each word, joined by space.
+    Falls back to the lowered word if metaphone produces empty codes.
+    """
+    try:
+        from metaphone import doublemetaphone
+    except ImportError:
+        # Graceful degradation — return phonetic_key if metaphone not installed
+        return phonetic_key(name)
+
+    words = name.lower().split()
+    codes = []
+    for w in words:
+        primary, _secondary = doublemetaphone(w)
+        codes.append(primary if primary else w)
+    return " ".join(codes)
