@@ -42,13 +42,21 @@ import hashlib
 import json
 import logging
 import re
-import shutil
 import sqlite3
 import sys
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+
+# Make 'core.engine.util' importable when run from anywhere
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from core.engine.util.macos_protected import (  # noqa: E402
+    ensure_access,
+    safe_snapshot,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -163,25 +171,14 @@ def _conv_id_for_chat(chat_guid: str) -> str:
     return f"conv_im_{h}"
 
 
-def _copy_chat_db() -> str:
-    """Snapshot chat.db (+ WAL/SHM) to /tmp to avoid lock contention."""
-    tmp = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-    tmp.close()
-    shutil.copy2(str(CHAT_DB_PATH), tmp.name)
-    for ext in ("-wal", "-shm"):
-        src = Path(str(CHAT_DB_PATH) + ext)
-        if src.exists():
-            try:
-                shutil.copy2(str(src), tmp.name + ext)
-            except (OSError, PermissionError):
-                pass
-    return tmp.name
+def _snapshot_chat_db() -> Path | None:
+    """Snapshot chat.db via the shared FDA-aware cache helper.
 
-
-def _cleanup_tmp(path: str) -> None:
-    Path(path).unlink(missing_ok=True)
-    for ext in ("-wal", "-shm"):
-        Path(path + ext).unlink(missing_ok=True)
+    Returns None if Full Disk Access is missing — caller should bail
+    cleanly without retrying. The snapshot is cached in /tmp for the
+    default TTL so back-to-back ingests don't re-trigger TCC.
+    """
+    return safe_snapshot(CHAT_DB_PATH, cache_key="imessage-chat-db")
 
 
 # ── Person resolution ────────────────────────────────────────────────────
@@ -268,9 +265,12 @@ def scan_messages(
         logger.warning("chat.db not found at %s", CHAT_DB_PATH)
         return []
 
-    tmp_path = _copy_chat_db()
+    snap = _snapshot_chat_db()
+    if snap is None:
+        return []  # FDA missing — instructions already printed
+
     try:
-        conn = sqlite3.connect(tmp_path)
+        conn = sqlite3.connect(str(snap))
         conn.row_factory = sqlite3.Row
 
         query = """
@@ -308,9 +308,9 @@ def scan_messages(
             query += f" LIMIT {int(limit)}"
 
         rows = conn.execute(query, params).fetchall()
-        conn.close()
     finally:
-        _cleanup_tmp(tmp_path)
+        conn.close()
+        # Snapshot is cached by safe_snapshot — don't delete it
 
     result: list[dict] = []
     for r in rows:
@@ -636,8 +636,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not is_available():
         print(f"error: chat.db not found at {CHAT_DB_PATH}", file=sys.stderr)
-        print("Grant Full Disk Access to your terminal app in System Settings.",
-              file=sys.stderr)
+        return 2
+    if not ensure_access(CHAT_DB_PATH, "iMessage chat.db"):
         return 2
 
     since = None
