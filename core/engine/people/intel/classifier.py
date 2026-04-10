@@ -153,11 +153,15 @@ class RuleClassifier:
         ):
             return Tier.EMERGING
 
-        # 5. ACTIVE — multi-channel (2+) AND density medium-or-high AND reasonably recent.
+        # 5. ACTIVE — multi-channel (2+) AND density medium-or-high AND recent activity.
+        #    Must have SOME recent communication (recent_volume > 0) to be active.
+        #    Without this, people with old multi-channel history and a single
+        #    recent message appear "active" when they're really fading.
         if (
             profile.channel_count >= ACTIVE_MIN_CHANNELS
             and _rank_in(profile.density_rank, ACTIVE_MIN_DENSITY_RANK_ANY)
             and days <= ACTIVE_MAX_DAYS_SINCE
+            and profile.recent_volume > 0
         ):
             return Tier.ACTIVE
 
@@ -187,16 +191,17 @@ class RuleClassifier:
         if days >= FADING_MIN_DAYS_SINCE and profile.density_rank in ("low", "medium"):
             return Tier.FADING
 
-        # 8. Low density + no recent activity = FADING, not active.
-        #    This catches the gap between ACTIVE (requires medium+ density, days <= 90)
-        #    and FADING (requires days >= 180). People at 90-180 days with low density
-        #    are fading, not active.
-        if profile.density_rank == "low" and (days > 90 or profile.recent_volume == 0):
+        # 8. No recent activity = FADING regardless of density.
+        #    Someone with medium density from years ago but no recent communication
+        #    is fading, not active. The density comes from historical depth.
+        if profile.recent_volume == 0:
             return Tier.FADING
 
-        # 9. Default — moderate signal, recent enough → ACTIVE.
-        #    Only reaches here if density is medium+ and days <= 90, or similar
-        #    profiles that genuinely indicate ongoing activity.
+        # 9. Low density + old = FADING.
+        if profile.density_rank == "low" and days > 60:
+            return Tier.FADING
+
+        # 10. Default — has recent volume, moderate density, recent contact → ACTIVE.
         return Tier.ACTIVE
 
 
