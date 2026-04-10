@@ -121,18 +121,30 @@ class RuleClassifier:
         if profile.density_rank == "minimal":
             return Tier.DORMANT
 
-        # 3. CORE — multi-channel, high density, very recent.
+        # 3. CORE — multi-channel, high density, very recent, with reciprocity.
+        #    Reciprocity check prevents one-way group-chat contacts from reaching CORE.
+        reciprocity = getattr(profile, "response_reciprocity", 0.5)
+        is_reciprocal = reciprocity >= 0.15  # at least 15% of comms are outbound
         if (
             profile.channel_count >= CORE_MIN_CHANNELS
             and _rank_at_least(profile.density_rank, CORE_MIN_DENSITY_RANK)
             and days <= CORE_MAX_DAYS_SINCE
+            and is_reciprocal
         ):
             return Tier.CORE
 
-        # 4. EMERGING — recent growing pattern, not yet dense enough for CORE/ACTIVE.
+        # 4. EMERGING — recent growing pattern OR high burstiness (intense recent engagement).
+        burstiness = getattr(profile, "burstiness", None)
         if (
             profile.dominant_pattern == "growing"
             and days <= EMERGING_MAX_DAYS_SINCE
+        ):
+            return Tier.EMERGING
+        if (
+            burstiness is not None
+            and burstiness > 1.5
+            and days <= EMERGING_MAX_DAYS_SINCE
+            and profile.recent_volume >= 20
         ):
             return Tier.EMERGING
 
@@ -145,9 +157,19 @@ class RuleClassifier:
             return Tier.ACTIVE
 
         # 6. CHANNEL_SPECIFIC — single-channel but high density.
+        #    If evening_ratio is high, boost toward personal relationship classification.
+        evening_ratio = getattr(profile, "evening_ratio", 0.0)
         if (
             profile.channel_count == 1
             and _rank_at_least(profile.density_rank, CHANNEL_SPECIFIC_MIN_DENSITY_RANK)
+        ):
+            return Tier.CHANNEL_SPECIFIC
+        # Single channel, medium density, but primarily personal hours → CHANNEL_SPECIFIC
+        if (
+            profile.channel_count == 1
+            and profile.density_rank == "medium"
+            and evening_ratio > 0.5
+            and days <= ACTIVE_MAX_DAYS_SINCE
         ):
             return Tier.CHANNEL_SPECIFIC
 

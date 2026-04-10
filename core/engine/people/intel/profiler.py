@@ -96,6 +96,13 @@ class PersonProfile:
     # Recency
     recent_volume: int = 0              # communication acts in last 90 days
 
+    # Behavioral features
+    burstiness: float | None = None     # CV of monthly message counts (high=bursty, low=steady)
+    weekend_ratio: float = 0.0          # weekend messages / total
+    evening_ratio: float = 0.0          # evening+late_night / total
+    response_reciprocity: float = 0.5   # sent / (sent + received), 0.5 = balanced
+    media_richness: float = 0.0         # (voice_notes + media + links) / total_messages
+
     # Density
     density_score: float = 0.0
     density_rank: str = "minimal"       # high | medium | low | minimal
@@ -438,6 +445,46 @@ class ProfileBuilder:
                 if month in recent_months:
                     recent_vol += count
         profile.recent_volume = recent_vol
+
+        # Behavioral features
+        all_buckets: list[int] = []
+        total_sent = 0
+        total_received = 0
+        total_evening_late = 0.0
+        total_weekend_est = 0.0
+        total_media = 0
+        total_msgs_for_ratios = 0
+
+        for sig in signals.communication:
+            all_buckets.extend(sig.temporal_buckets.values())
+            total_sent += sig.sent or 0
+            total_received += sig.received or 0
+            total_msgs_for_ratios += sig.total_messages or 0
+            total_evening_late += (sig.evening_pct or 0) * (sig.total_messages or 0)
+            total_media += (sig.voice_notes_sent or 0) + (sig.voice_notes_received or 0)
+            total_media += (sig.media_sent or 0) + (sig.media_received or 0)
+            total_media += (sig.links_shared or 0)
+
+        # Burstiness: coefficient of variation of monthly message counts
+        if len(all_buckets) >= 3:
+            import statistics
+            mean_b = statistics.mean(all_buckets)
+            if mean_b > 0:
+                std_b = statistics.stdev(all_buckets)
+                profile.burstiness = round(std_b / mean_b, 3)
+
+        # Evening ratio (weighted by message count per channel)
+        if total_msgs_for_ratios > 0:
+            profile.evening_ratio = round(total_evening_late / total_msgs_for_ratios, 3)
+
+        # Reciprocity: sent / (sent + received)
+        total_comms = total_sent + total_received
+        if total_comms > 0:
+            profile.response_reciprocity = round(total_sent / total_comms, 3)
+
+        # Media richness
+        if total_msgs_for_ratios > 0:
+            profile.media_richness = round(min(total_media / total_msgs_for_ratios, 1.0), 3)
 
         # Density score + rank
         profile.density_score = self._compute_density(profile)
