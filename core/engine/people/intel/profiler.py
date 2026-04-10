@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .store import DEFAULT_DB_PATH, SignalStore
@@ -32,30 +32,30 @@ logger = logging.getLogger(__name__)
 # ── Density weights — tunable, documented as module constants ────────
 #
 # Each weight describes how much a given signal dimension contributes to
-# the overall density score. Weights sum to ~1.0. Each raw value is
-# normalized against a cap (anything above the cap contributes 1.0).
+# Density is channel-agnostic and recency-weighted. It measures how much
+# someone communicates with the operator RIGHT NOW, not historically.
 #
-# These are heuristics, not hard science — they exist to give the rule
-# classifier a reasonable "how much is going on with this person" number.
-# Tune them in one place without touching the classifier.
+# Three components:
+#   1. Recent volume (50%) — communication acts in the last 90 days.
+#      This is the primary signal. Historical volume doesn't count here.
+#   2. Channel diversity (20%) — multi-channel = stronger signal.
+#   3. Relationship depth (30%) — all-time volume + calls + presence.
+#      Decayed: all-time volume is normalized against a high cap so only
+#      truly deep relationships (1000+ msgs) score meaningfully here.
+#
+# This design is channel-agnostic: adding new channels automatically
+# flows into recent_volume and channel_count without weight changes.
 
-DENSITY_WEIGHT_MESSAGES = 0.30
-DENSITY_WEIGHT_CALLS = 0.15
-DENSITY_WEIGHT_PHOTOS = 0.10
-DENSITY_WEIGHT_EMAILS = 0.05
-DENSITY_WEIGHT_CHANNELS = 0.20
-DENSITY_WEIGHT_METADATA = 0.20
+DENSITY_RECENT_WEIGHT = 0.50      # recent 90-day volume
+DENSITY_CHANNEL_WEIGHT = 0.20     # channel diversity
+DENSITY_DEPTH_WEIGHT = 0.30       # all-time depth
 
-DENSITY_CAP_MESSAGES = 1000
-DENSITY_CAP_CALLS = 100
-DENSITY_CAP_PHOTOS = 200
-DENSITY_CAP_EMAILS = 500
-DENSITY_CAP_CHANNELS = 5          # 5+ channels → max
-DENSITY_CAP_METADATA = 10         # richness score cap
+DENSITY_RECENT_CAP = 500          # 500+ recent communication acts → max
+DENSITY_CHANNEL_CAP = 5           # 5+ channels → max
+DENSITY_DEPTH_CAP = 5000          # 5000+ all-time acts → max depth
 
-# Rank thresholds — the boundaries are inclusive of the lower side.
-DENSITY_RANK_HIGH = 0.60
-DENSITY_RANK_MEDIUM = 0.30
+DENSITY_RANK_HIGH = 0.45
+DENSITY_RANK_MEDIUM = 0.20
 DENSITY_RANK_LOW = 0.01           # anything above 0 is at least "low"
 
 
@@ -92,6 +92,9 @@ class PersonProfile:
     last_interaction_date: str | None = None
     days_since_last: int | None = None
     span_years: float = 0.0
+
+    # Recency
+    recent_volume: int = 0              # communication acts in last 90 days
 
     # Density
     density_score: float = 0.0
@@ -419,6 +422,23 @@ class ProfileBuilder:
         profile.has_related_names = has_related
         profile.has_physical_address = has_addr
 
+        # Recent volume: sum temporal_buckets for last 3 months
+        recent_months = set()
+        now = datetime.now(timezone.utc)
+        for i in range(3):
+            dt = now - timedelta(days=30 * i)
+            recent_months.add(dt.strftime("%Y-%m"))
+        recent_vol = 0
+        for sig in signals.communication:
+            for month, count in sig.temporal_buckets.items():
+                if month in recent_months:
+                    recent_vol += count
+        for sig in signals.voice:
+            for month, count in sig.temporal_buckets.items():
+                if month in recent_months:
+                    recent_vol += count
+        profile.recent_volume = recent_vol
+
         # Density score + rank
         profile.density_score = self._compute_density(profile)
         profile.density_rank = self._rank_density(profile.density_score)
@@ -426,20 +446,26 @@ class ProfileBuilder:
         return profile
 
     def _compute_density(self, profile: PersonProfile) -> float:
-        score = (
-            DENSITY_WEIGHT_MESSAGES
-            * _normalize(profile.total_messages, DENSITY_CAP_MESSAGES)
-            + DENSITY_WEIGHT_CALLS
-            * _normalize(profile.total_calls, DENSITY_CAP_CALLS)
-            + DENSITY_WEIGHT_PHOTOS
-            * _normalize(profile.total_photos, DENSITY_CAP_PHOTOS)
-            + DENSITY_WEIGHT_EMAILS
-            * _normalize(profile.total_emails, DENSITY_CAP_EMAILS)
-            + DENSITY_WEIGHT_CHANNELS
-            * _normalize(profile.channel_count, DENSITY_CAP_CHANNELS)
-            + DENSITY_WEIGHT_METADATA
-            * _normalize(profile.metadata_richness, DENSITY_CAP_METADATA)
+        # Recent volume (50%): communication acts in last 90 days.
+        recent = DENSITY_RECENT_WEIGHT * _normalize(
+            profile.recent_volume, DENSITY_RECENT_CAP
         )
+
+        # Channel diversity (20%): multi-channel = stronger signal.
+        channels = DENSITY_CHANNEL_WEIGHT * _normalize(
+            profile.channel_count, DENSITY_CHANNEL_CAP
+        )
+
+        # Relationship depth (30%): all-time volume across all types.
+        all_time = (
+            profile.total_messages
+            + profile.total_calls * 10   # calls are higher-signal than texts
+            + profile.total_photos
+            + profile.total_emails
+        )
+        depth = DENSITY_DEPTH_WEIGHT * _normalize(all_time, DENSITY_DEPTH_CAP)
+
+        score = recent + channels + depth
         return round(_clamp(score, 0.0, 1.0), 4)
 
     @staticmethod

@@ -24,8 +24,8 @@ from ..models import Message
 
 log = logging.getLogger(__name__)
 
-# People Intelligence DB — lives at ~/.aos/services/people/
-_PEOPLE_SERVICE = Path.home() / ".aos" / "services" / "people"
+# People Intelligence DB module
+_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
 
 
 def _get_people_db():

@@ -17,7 +17,7 @@ import logging
 import sys
 from pathlib import Path
 
-_PEOPLE_SERVICE = Path.home() / ".aos" / "services" / "people"
+_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
 sys.path.insert(0, str(_PEOPLE_SERVICE))
 
 import db as people_db

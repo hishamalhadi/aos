@@ -939,3 +939,121 @@ class HygieneEngine:
 
         self.conn.commit()
         return {"queue_id": queue_id, "status": "rejected", "notes": notes}
+
+    # ------------------------------------------------------------------
+    # Bulk Operations
+    # ------------------------------------------------------------------
+
+    def bulk_process(self, min_confidence: float = 0.9, action: str = "approve") -> dict[str, int]:
+        """Bulk approve or reject hygiene queue items above a confidence threshold.
+
+        Only processes items where action_type = 'merge' and both persons share
+        at least one identifier (phone, email, wa_jid) to prevent false merges.
+
+        Returns {processed: N, skipped: N, errors: N}.
+        """
+        stats = {"processed": 0, "skipped": 0, "errors": 0}
+
+        rows = self.conn.execute(
+            "SELECT id, person_a_id, person_b_id, confidence, action_type, reason "
+            "FROM hygiene_queue WHERE status = 'pending' AND confidence >= ?",
+            (min_confidence,),
+        ).fetchall()
+
+        for row in rows:
+            qid = row["id"]
+
+            # Safety: for merges, verify shared identifier exists
+            if row["action_type"] == "merge" and action == "approve":
+                shared = self.conn.execute(
+                    """SELECT 1 FROM person_identifiers a
+                       JOIN person_identifiers b
+                         ON a.type = b.type AND lower(a.value) = lower(b.value)
+                       WHERE a.person_id = ? AND b.person_id = ?
+                       LIMIT 1""",
+                    (row["person_a_id"], row["person_b_id"]),
+                ).fetchone()
+                if not shared:
+                    stats["skipped"] += 1
+                    continue
+
+            try:
+                if action == "approve":
+                    self.approve_issue(qid)
+                else:
+                    self.reject_issue(qid, notes="bulk_reject")
+                stats["processed"] += 1
+            except Exception as e:
+                logger.warning("bulk_process error on %s: %s", qid, e)
+                stats["errors"] += 1
+
+        return stats
+
+    def queue_stats(self) -> dict[str, Any]:
+        """Summary of hygiene queue by status and action_type."""
+        rows = self.conn.execute("""
+            SELECT status, action_type, COUNT(*) as count,
+                   ROUND(AVG(confidence), 2) as avg_conf,
+                   MIN(confidence) as min_conf,
+                   MAX(confidence) as max_conf
+            FROM hygiene_queue
+            GROUP BY status, action_type
+            ORDER BY status, action_type
+        """).fetchall()
+        return [dict(r) for r in rows]
+
+    def scan_lifecycle_candidates(self, stale_days: int = 730) -> list[dict[str, Any]]:
+        """Find people who should transition lifecycle state.
+
+        Detects:
+        - Likely stale: importance >= 3, no interaction in stale_days, no pinned importance
+        - Ghost contacts: no identifiers AND no interactions AND no signals
+        """
+        now = _now()
+        cutoff = now - (stale_days * 86400)
+        candidates: list[dict[str, Any]] = []
+
+        # Stale contacts: no interaction in N days, low importance, not pinned
+        stale = self.conn.execute("""
+            SELECT p.id, p.canonical_name, p.importance,
+                   rs.last_interaction_at, rs.days_since_contact
+            FROM people p
+            LEFT JOIN relationship_state rs ON rs.person_id = p.id
+            WHERE p.is_archived = 0
+              AND COALESCE(p.lifecycle_state, 'active') = 'active'
+              AND p.pinned_importance IS NULL
+              AND p.is_self = 0
+              AND p.importance >= 3
+              AND (rs.last_interaction_at IS NULL OR rs.last_interaction_at < ?)
+        """, (cutoff,)).fetchall()
+
+        for row in stale:
+            candidates.append({
+                "person_id": row["id"],
+                "name": row["canonical_name"],
+                "suggested_state": "archived",
+                "reason": f"No interaction in {stale_days}+ days, importance={row['importance']}",
+                "days_since": row["days_since_contact"],
+            })
+
+        # Ghost contacts: exist in people but have nothing
+        ghosts = self.conn.execute("""
+            SELECT p.id, p.canonical_name
+            FROM people p
+            WHERE p.is_archived = 0
+              AND COALESCE(p.lifecycle_state, 'active') = 'active'
+              AND p.is_self = 0
+              AND p.id NOT IN (SELECT DISTINCT person_id FROM signal_store)
+              AND p.id NOT IN (SELECT DISTINCT person_id FROM interactions)
+              AND p.id NOT IN (SELECT DISTINCT person_id FROM person_identifiers)
+        """).fetchall()
+
+        for row in ghosts:
+            candidates.append({
+                "person_id": row["id"],
+                "name": row["canonical_name"],
+                "suggested_state": "archived",
+                "reason": "Ghost contact: no signals, no interactions, no identifiers",
+            })
+
+        return candidates
