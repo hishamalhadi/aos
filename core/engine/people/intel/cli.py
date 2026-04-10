@@ -24,6 +24,7 @@ import argparse
 import asyncio
 import json
 import logging
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -632,6 +633,214 @@ def cmd_nudge_done(args: argparse.Namespace) -> int:
     return 1
 
 
+# ── Dashboard + Hygiene commands ──────────────────────────────────────
+
+
+def _resolve_db(args: argparse.Namespace) -> Path:
+    """Resolve the people.db path from args or default."""
+    if args.db:
+        return Path(args.db)
+    return DEFAULT_PEOPLE_DB
+
+
+def cmd_dashboard(args: argparse.Namespace) -> int:
+    """Print a People Intelligence dashboard summary."""
+    db_path = _resolve_db(args)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    # Tier distribution
+    tiers = conn.execute("""
+        SELECT pc.tier, COUNT(*) as count
+        FROM person_classification pc
+        JOIN people p ON pc.person_id = p.id
+        WHERE p.is_archived = 0
+        GROUP BY pc.tier ORDER BY count DESC
+    """).fetchall()
+
+    # Inner circle
+    inner = conn.execute("""
+        SELECT p.canonical_name, COALESCE(pc.tier, 'n/a') as tier,
+               CASE WHEN p.pinned_importance IS NOT NULL THEN 'PIN' ELSE '' END as pin
+        FROM people p
+        LEFT JOIN person_classification pc ON p.id = pc.person_id
+        WHERE p.importance = 1 AND p.is_self = 0 AND p.is_archived = 0
+        ORDER BY p.canonical_name
+    """).fetchall()
+
+    # Coverage
+    coverage = conn.execute("""
+        SELECT source_name, COUNT(DISTINCT person_id) as people
+        FROM signal_store GROUP BY source_name ORDER BY people DESC
+    """).fetchall()
+
+    # Hygiene summary
+    hygiene = conn.execute("""
+        SELECT action_type, COUNT(*) as count
+        FROM hygiene_queue WHERE status = 'pending'
+        GROUP BY action_type
+    """).fetchall()
+
+    # Stats
+    total = conn.execute("SELECT COUNT(*) FROM people WHERE is_archived = 0").fetchone()[0]
+    with_signals = conn.execute(
+        "SELECT COUNT(DISTINCT person_id) FROM signal_store"
+    ).fetchone()[0]
+    pinned = conn.execute(
+        "SELECT COUNT(*) FROM people WHERE pinned_importance IS NOT NULL AND is_archived = 0"
+    ).fetchone()[0]
+
+    conn.close()
+
+    print("=" * 60)
+    print("  PEOPLE INTELLIGENCE DASHBOARD")
+    print("=" * 60)
+    print(f"\n  People: {total} active | {with_signals} with signals | {pinned} pinned")
+
+    print(f"\n  Tier Distribution:")
+    for row in tiers:
+        bar = "#" * min(row["count"] // 5, 40)
+        print(f"    {row['tier']:15s} {row['count']:4d}  {bar}")
+
+    print(f"\n  Inner Circle ({len(inner)}):")
+    for row in inner:
+        pin = f" [{row['pin']}]" if row["pin"] else ""
+        print(f"    {row['canonical_name']}{pin}")
+
+    print(f"\n  Signal Coverage:")
+    for row in coverage:
+        print(f"    {row['source_name']:20s} {row['people']:4d} people")
+
+    if hygiene:
+        print(f"\n  Hygiene Queue (pending):")
+        for row in hygiene:
+            print(f"    {row['action_type']:15s} {row['count']:4d}")
+
+    print()
+    return 0
+
+
+def cmd_hygiene_stats(args: argparse.Namespace) -> int:
+    """Print hygiene queue statistics."""
+    db_path = _resolve_db(args)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    from ..hygiene import HygieneEngine
+    h = HygieneEngine(conn)
+    stats = h.queue_stats()
+    conn.close()
+
+    if not stats:
+        print("Hygiene queue is empty.")
+        return 0
+
+    print(f"{'Status':12s} {'Type':15s} {'Count':>6s} {'Avg Conf':>9s}")
+    print("-" * 45)
+    for row in stats:
+        print(f"{row['status']:12s} {row['action_type']:15s} {row['count']:6d} {row['avg_conf'] or 0:9.2f}")
+    return 0
+
+
+def cmd_hygiene_approve(args: argparse.Namespace) -> int:
+    """Bulk approve hygiene items above confidence threshold."""
+    db_path = _resolve_db(args)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    from ..hygiene import HygieneEngine
+    h = HygieneEngine(conn)
+    result = h.bulk_process(min_confidence=args.min_confidence)
+    conn.close()
+
+    print(f"Processed: {result['processed']}, Skipped: {result['skipped']}, Errors: {result['errors']}")
+    return 0
+
+
+def cmd_hygiene_scan(args: argparse.Namespace) -> int:
+    """Run hygiene scans (duplicates + lifecycle candidates)."""
+    db_path = _resolve_db(args)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    from ..hygiene import HygieneEngine
+    h = HygieneEngine(conn)
+
+    print("Running batch dedup...")
+    dedup = h.batch_dedup()
+    print(f"  Candidates: {dedup['candidates']}, Auto-merged: {dedup['auto_merged']}, Queued: {dedup['queued_for_review']}")
+
+    print("Scanning lifecycle candidates...")
+    candidates = h.scan_lifecycle_candidates()
+    print(f"  Found: {len(candidates)} candidates for archival")
+
+    conn.close()
+    return 0
+
+
+def cmd_pin(args: argparse.Namespace) -> int:
+    """Pin a person's importance level."""
+    db_path = _resolve_db(args)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    # Resolve person by ID or name
+    person = conn.execute(
+        "SELECT id, canonical_name FROM people WHERE id = ? OR canonical_name LIKE ?",
+        (args.person, f"%{args.person}%"),
+    ).fetchone()
+
+    if not person:
+        print(f"Person not found: {args.person}", file=sys.stderr)
+        conn.close()
+        return 1
+
+    import time
+    conn.execute(
+        "UPDATE people SET pinned_importance = ?, importance = ?, updated_at = ? WHERE id = ?",
+        (args.importance, args.importance, int(time.time()), person["id"]),
+    )
+    conn.commit()
+    conn.close()
+    print(f"Pinned {person['canonical_name']} at importance={args.importance}")
+    return 0
+
+
+def cmd_lifecycle(args: argparse.Namespace) -> int:
+    """Set a person's lifecycle state."""
+    db_path = _resolve_db(args)
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+
+    person = conn.execute(
+        "SELECT id, canonical_name FROM people WHERE id = ? OR canonical_name LIKE ?",
+        (args.person, f"%{args.person}%"),
+    ).fetchone()
+
+    if not person:
+        print(f"Person not found: {args.person}", file=sys.stderr)
+        conn.close()
+        return 1
+
+    import time
+    now = int(time.time())
+    updates = {"lifecycle_state": args.state, "updated_at": now}
+    if args.state == "archived":
+        updates["is_archived"] = 1
+    elif args.state == "active":
+        updates["is_archived"] = 0
+
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    conn.execute(
+        f"UPDATE people SET {set_clause} WHERE id = ?",
+        list(updates.values()) + [person["id"]],
+    )
+    conn.commit()
+    conn.close()
+    print(f"Set {person['canonical_name']} lifecycle → {args.state}")
+    return 0
+
+
 # ── Parser ───────────────────────────────────────────────────────────
 
 
@@ -799,6 +1008,37 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Filter to people.importance <= N")
     sp.add_argument("--no-vault", action="store_true")
     sp.set_defaults(func=cmd_compile_profiles)
+
+    # ── Dashboard + Hygiene commands ──
+
+    # dashboard
+    sp = sub.add_parser("dashboard", help="People Intelligence dashboard summary")
+    sp.set_defaults(func=cmd_dashboard)
+
+    # hygiene stats
+    sp = sub.add_parser("hygiene-stats", help="Hygiene queue summary")
+    sp.set_defaults(func=cmd_hygiene_stats)
+
+    # hygiene auto-approve
+    sp = sub.add_parser("hygiene-approve", help="Bulk approve high-confidence items")
+    sp.add_argument("--min-confidence", type=float, default=0.9)
+    sp.set_defaults(func=cmd_hygiene_approve)
+
+    # hygiene scan
+    sp = sub.add_parser("hygiene-scan", help="Run duplicate + lifecycle scans")
+    sp.set_defaults(func=cmd_hygiene_scan)
+
+    # pin
+    sp = sub.add_parser("pin", help="Pin a person's importance level")
+    sp.add_argument("person", help="Person ID or name")
+    sp.add_argument("importance", type=int, choices=[1, 2, 3, 4])
+    sp.set_defaults(func=cmd_pin)
+
+    # lifecycle
+    sp = sub.add_parser("lifecycle", help="Set a person's lifecycle state")
+    sp.add_argument("person", help="Person ID or name")
+    sp.add_argument("state", choices=["active", "deceased", "archived", "blocked"])
+    sp.set_defaults(func=cmd_lifecycle)
 
     return parser
 
