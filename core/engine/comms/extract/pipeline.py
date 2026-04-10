@@ -232,6 +232,135 @@ class ResolverCache:
         }
 
 
+# ── Push name sync ──────────────────────────────────────────
+
+
+def sync_pushnames(conn=None) -> dict[str, int]:
+    """Sync WhatsApp push names to the aliases table and detect spelling corrections.
+
+    Push names are what people set as their own WhatsApp display name. They're
+    the most authoritative source for a person's preferred name spelling.
+
+    This function:
+    1. Reads all push names from WhatsApp's local SQLite DB
+    2. Matches each to an existing person via wa_jid
+    3. Stores the push name as an alias (type='pushname')
+    4. If the push name is a clean full name that differs from canonical_name,
+       updates canonical_name (spelling correction)
+
+    Returns {synced: N, aliases_added: N, names_corrected: N}.
+    """
+    import re as _re
+    import time as _time
+
+    wa_db = Path.home() / "Library" / "Group Containers" / \
+        "group.net.whatsapp.WhatsApp.shared" / "ChatStorage.sqlite"
+    if not wa_db.exists():
+        return {"synced": 0, "aliases_added": 0, "names_corrected": 0, "error": "wa_db_not_found"}
+
+    own_conn = conn is None
+    if own_conn:
+        conn = people_db.connect()
+
+    stats = {"synced": 0, "aliases_added": 0, "names_corrected": 0}
+    now = int(_time.time())
+
+    try:
+        import sqlite3 as _sql
+        wa = _sql.connect(str(wa_db))
+        pushnames = wa.execute(
+            "SELECT ZJID, ZPUSHNAME FROM ZWAPROFILEPUSHNAME WHERE ZPUSHNAME IS NOT NULL"
+        ).fetchall()
+        wa.close()
+    except Exception as e:
+        log.warning("sync_pushnames: could not read WhatsApp DB: %s", e)
+        return {**stats, "error": str(e)}
+
+    for jid, pushname in pushnames:
+        pushname = (pushname or "").strip()
+        if not pushname or len(pushname) < 2:
+            continue
+
+        # Quality filter: skip garbage push names
+        alpha = "".join(c for c in pushname if c.isalpha() or c.isspace()).strip()
+        if len(alpha) < 3:
+            continue  # Too short (initials like "AR", "AA", "M.A")
+        if len(pushname) > 35:
+            continue  # Status text, not a name ("From the River to the Sea")
+        if _re.match(r'^[\d\+\s\-\(\)]+$', pushname):
+            continue  # Phone number as push name
+        if _re.match(r'^[A-Z][.\s]?[A-Z]?[.\s]?$', pushname.strip()):
+            continue  # Just initials ("A.", "AR", "ASR")
+        # Skip if mostly non-Latin (Arabic status text, Quranic verses)
+        latin_chars = sum(1 for c in pushname if c.isascii() and c.isalpha())
+        non_latin = sum(1 for c in pushname if not c.isascii() and c.isalpha())
+        if non_latin > latin_chars and non_latin > 3:
+            continue  # Arabic/Urdu status text, not a name
+        # Skip emoji-heavy names
+        emoji_count = sum(1 for c in pushname if ord(c) > 0x1F000)
+        if emoji_count > 0 and len(alpha) < 5:
+            continue  # Emoji name like "👍🏼" or "AZ🌹"
+
+        # Find person by wa_jid
+        person = conn.execute(
+            "SELECT p.id, p.canonical_name, p.first_name FROM people p "
+            "JOIN person_identifiers pi ON pi.person_id = p.id "
+            "WHERE pi.type = 'wa_jid' AND pi.value = ? AND p.is_archived = 0",
+            (jid,),
+        ).fetchone()
+
+        if not person:
+            continue
+
+        pid = person["id"]
+        canonical = person["canonical_name"] or ""
+        stats["synced"] += 1
+
+        # Store as alias (idempotent)
+        alias_key = pushname.lower().replace(" ", "")
+        existing = conn.execute(
+            "SELECT alias FROM aliases WHERE alias = ?", (alias_key,)
+        ).fetchone()
+        if not existing:
+            try:
+                conn.execute(
+                    "INSERT INTO aliases (alias, person_id, type, priority, created_at) "
+                    "VALUES (?, ?, 'pushname', 0, ?)",
+                    (alias_key, pid, now),
+                )
+                stats["aliases_added"] += 1
+            except Exception:
+                pass  # Duplicate or constraint violation
+
+        # Check for spelling correction opportunity
+        # Only correct if push name looks like a clean full name (has space, no emojis/symbols)
+        has_space = " " in pushname
+        is_clean = bool(_re.match(r"^[A-Za-z][A-Za-z .'-]+$", pushname))
+        is_garbage = "/" in canonical or any(c.isdigit() for c in canonical)
+
+        if is_clean and (has_space or is_garbage):
+            # Does the push name differ meaningfully from canonical?
+            if pushname.lower() != canonical.lower():
+                # For garbage names, always correct
+                if is_garbage:
+                    parts = pushname.split(None, 1)
+                    conn.execute(
+                        "UPDATE people SET canonical_name = ?, first_name = ?, last_name = ?, "
+                        "display_name = ?, updated_at = ? WHERE id = ?",
+                        (pushname, parts[0], parts[1] if len(parts) > 1 else None,
+                         parts[0], now, pid),
+                    )
+                    stats["names_corrected"] += 1
+                    log.info("Push name corrected: '%s' → '%s'", canonical, pushname)
+
+    conn.commit()
+    if own_conn:
+        conn.close()
+
+    log.info("sync_pushnames: %s", stats)
+    return stats
+
+
 # ── Interaction grouping ─────────────────────────────────
 
 def _date_key(dt: datetime) -> str:
@@ -658,6 +787,11 @@ def run_extraction(days: int = 365, channels: list[str] | None = None, dry_run: 
         if resolver.unresolved_handles:
             conn.commit()
             log.info(f"  Tracked {len(resolver.unresolved_handles)} unresolved handles")
+
+        # Sync WhatsApp push names → aliases + spelling corrections
+        log.info("Syncing WhatsApp push names...")
+        push_stats = sync_pushnames(conn)
+        log.info(f"  Push names: {push_stats}")
 
         # Classify unresolved handles
         _classify_unresolved(conn)
