@@ -1,0 +1,590 @@
+#!/usr/bin/env python3
+"""message-person — resolve a person by name and send them a message.
+
+Unified multi-channel messaging CLI. Resolves people via the People DB,
+auto-picks the best channel, previews, and sends through the appropriate
+adapter (WhatsApp, iMessage, Telegram, Slack, email).
+
+Usage:
+    message-person --to "<name>" --text "<body>"
+    message-person --to "<name>" --text "<body>" --channel imessage
+    message-person --to "<name>" --text "<body>" --dry-run --json
+    message-person --to "<name>" --hint text --text "<body>"
+    echo "<body>" | message-person --to "<name>"
+
+    # Bypass resolver (direct addressing):
+    message-person --jid 15550100100@s.whatsapp.net --text "<body>"
+    message-person --phone "+1 555-0100" --text "<body>"
+    message-person --email "alice@example.com" --text "<body>" --subject "Hello"
+
+Exit codes:
+    0  sent successfully (or dry-run completed)
+    1  send failed / adapter unreachable
+    2  could not resolve person unambiguously
+    3  bad arguments
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+import time
+from pathlib import Path
+
+# Make the AOS codebase importable from either the dev workspace or runtime.
+for _candidate in (Path.home() / "project" / "aos", Path.home() / "aos"):
+    if (_candidate / "core").is_dir():
+        sys.path.insert(0, str(_candidate))
+        break
+
+from core.engine.comms.resolver import resolve_contact  # noqa: E402
+
+# ── Channel definitions ──────────────────────────────────────────────
+
+ALL_CHANNELS = ("whatsapp", "imessage", "telegram", "slack", "email")
+
+# Verb hints → preferred channel. The skill maps operator phrasing to these.
+VERB_HINTS = {
+    "whatsapp": "whatsapp",
+    "wa": "whatsapp",
+    "text": "imessage",
+    "itext": "imessage",
+    "imessage": "imessage",
+    "telegram": "telegram",
+    "tg": "telegram",
+    "dm": "slack",
+    "slack": "slack",
+    "email": "email",
+    "mail": "email",
+    "message": None,   # generic → auto-pick
+    "tell": None,
+    "send": None,
+    "let": None,
+}
+
+# Default priority when auto-picking. Ordered by immediacy / conversational nature.
+CHANNEL_PRIORITY = ["whatsapp", "imessage", "telegram", "slack", "email"]
+
+DRAFTS_PATH = Path.home() / ".aos" / "data" / "comms-drafts.jsonl"
+
+
+# ── Adapter loading (lazy, per-channel) ──────────────────────────────
+
+def _load_adapter(channel: str):
+    """Load and return a channel adapter instance. Returns None if unavailable."""
+    try:
+        if channel == "whatsapp":
+            from core.engine.comms.channels.whatsapp import WhatsAppAdapter
+            return WhatsAppAdapter()
+        elif channel == "imessage":
+            from core.engine.comms.channels.imessage import iMessageAdapter
+            return iMessageAdapter()
+        elif channel == "telegram":
+            from core.engine.comms.channels.telegram import TelegramAdapter
+            return TelegramAdapter()
+        elif channel == "slack":
+            from core.engine.comms.channels.slack import SlackAdapter
+            return SlackAdapter()
+        elif channel == "email":
+            from core.engine.comms.channels.email import EmailAdapter
+            return EmailAdapter()
+    except (ImportError, Exception):
+        return None
+    return None
+
+
+# ── Recipient extraction (contact dict → channel-specific address) ───
+
+def _recipient_for(contact: dict, channel: str) -> str | None:
+    """Extract the channel-specific recipient from a resolved contact dict."""
+    if channel == "whatsapp":
+        jid = contact.get("wa_jid")
+        if jid:
+            return jid
+        phones = contact.get("phones") or []
+        return phones[0] if phones else None
+
+    elif channel == "imessage":
+        handle = contact.get("imessage_handle")
+        if handle:
+            return handle
+        phones = contact.get("phones") or []
+        if phones:
+            return phones[0]
+        emails = contact.get("emails") or []
+        return emails[0] if emails else None
+
+    elif channel == "telegram":
+        tid = contact.get("telegram_id")
+        if tid:
+            return tid
+        return contact.get("telegram_username")
+
+    elif channel == "slack":
+        return contact.get("slack_user_id")
+
+    elif channel == "email":
+        emails = contact.get("emails") or []
+        return emails[0] if emails else None
+
+    return None
+
+
+# ── Smart channel picker ─────────────────────────────────────────────
+
+def _pick_channel(contact: dict, hint: str | None = None) -> tuple[str, str]:
+    """Pick the best channel to reach a contact.
+
+    Returns (channel_name, why_chosen) where why_chosen explains the decision
+    for transparency in the skill.
+    """
+    # 1. Explicit hint from operator verb
+    if hint:
+        mapped = VERB_HINTS.get(hint.lower())
+        if mapped:
+            recip = _recipient_for(contact, mapped)
+            if recip:
+                return mapped, f"hint={hint} → {mapped}"
+            # Hint didn't resolve — fall through with a note
+            hint_note = f"hint={hint} → {mapped}, but no {mapped} identifier"
+        else:
+            hint_note = f"hint={hint} → unrecognized, auto-picking"
+    else:
+        hint_note = None
+
+    # 2. Contact's preferred channel
+    preferred = contact.get("preferred_channel", "")
+    if preferred and preferred in ALL_CHANNELS:
+        recip = _recipient_for(contact, preferred)
+        if recip:
+            why = f"preferred_channel={preferred}"
+            if hint_note:
+                why = f"{hint_note}; fallback to {why}"
+            return preferred, why
+
+    # 3. Data-driven: pick the channel with the most communication history.
+    #    If you exchange 25,000 iMessages with someone, pick iMessage, not WhatsApp.
+    person_id = contact.get("person_id")
+    if person_id:
+        best_ch, best_count = _best_channel_from_history(person_id)
+        if best_ch:
+            recip = _recipient_for(contact, best_ch)
+            if recip:
+                why = f"most-used channel ({best_ch}, {best_count} msgs)"
+                if hint_note:
+                    why = f"{hint_note}; fallback to {why}"
+                return best_ch, why
+
+    # 4. Fallback: priority-order availability
+    for ch in CHANNEL_PRIORITY:
+        recip = _recipient_for(contact, ch)
+        if recip:
+            why = f"first available in priority order ({ch})"
+            if hint_note:
+                why = f"{hint_note}; fallback to {why}"
+            return ch, why
+
+    why = "no channel identifier found on contact"
+    if hint_note:
+        why = f"{hint_note}; {why}"
+    return "none", why
+
+
+def _best_channel_from_history(person_id: str) -> tuple[str | None, int]:
+    """Query signal_store for the channel with the most messages.
+
+    Maps signal channel names to messaging channel names:
+      imessage → imessage, whatsapp → whatsapp, signal → signal, etc.
+    """
+    import json
+    import sqlite3
+
+    db_path = Path.home() / ".aos" / "data" / "people.db"
+    if not db_path.exists():
+        return None, 0
+
+    try:
+        conn = sqlite3.connect(str(db_path))
+        rows = conn.execute(
+            "SELECT signals_json FROM signal_store WHERE person_id = ? "
+            "AND source_name IN ('apple_messages', 'whatsapp', 'telegram')",
+            (person_id,),
+        ).fetchall()
+        conn.close()
+    except Exception:
+        return None, 0
+
+    # Channel name mapping: signal source → messaging channel
+    SIGNAL_TO_CHANNEL = {
+        "imessage": "imessage",
+        "sms": "imessage",  # SMS sends via Messages app
+        "whatsapp": "whatsapp",
+        "telegram": "telegram",
+        "signal": "signal",
+    }
+
+    channel_totals: dict[str, int] = {}
+    for (sj,) in rows:
+        data = json.loads(sj)
+        for sig in data.get("communication", []):
+            ch = sig.get("channel", "")
+            mapped = SIGNAL_TO_CHANNEL.get(ch)
+            if mapped:
+                channel_totals[mapped] = channel_totals.get(mapped, 0) + (sig.get("total_messages") or 0)
+
+    if not channel_totals:
+        return None, 0
+
+    best = max(channel_totals, key=channel_totals.get)
+    return best, channel_totals[best]
+
+
+# ── Draft logging ────────────────────────────────────────────────────
+
+def _log_draft(entry: dict) -> str:
+    """Append a draft entry to comms-drafts.jsonl. Returns draft_id."""
+    draft_id = f"d-{int(time.time() * 1000)}"
+    entry["draft_id"] = draft_id
+    entry["ts"] = time.time()
+    DRAFTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(DRAFTS_PATH, "a") as f:
+        f.write(json.dumps(entry, default=str) + "\n")
+    return draft_id
+
+
+# ── Contact shaping ──────────────────────────────────────────────────
+
+def _shape_contact(contact: dict) -> dict:
+    """Slim the resolver's contact dict for output."""
+    return {
+        "person_id": contact.get("person_id"),
+        "name": contact.get("name"),
+        "wa_jid": contact.get("wa_jid"),
+        "phones": contact.get("phones") or [],
+        "emails": contact.get("emails") or [],
+        "telegram_id": contact.get("telegram_id"),
+        "telegram_username": contact.get("telegram_username"),
+        "slack_user_id": contact.get("slack_user_id"),
+        "imessage_handle": contact.get("imessage_handle"),
+        "preferred_channel": contact.get("preferred_channel"),
+    }
+
+
+# ── Output ───────────────────────────────────────────────────────────
+
+CHANNEL_DISPLAY = {
+    "whatsapp": "WhatsApp",
+    "imessage": "iMessage",
+    "telegram": "Telegram",
+    "slack": "Slack",
+    "email": "Email",
+}
+
+
+def _emit(payload: dict, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return
+
+    status = payload.get("status")
+    ch = CHANNEL_DISPLAY.get(payload.get("channel", ""), payload.get("channel", ""))
+
+    if status == "sent":
+        c = payload["contact"]
+        print(f"✓ Sent via {ch} to {c['name']} ({payload.get('recipient', '')})")
+        print(f"  {payload['text']}")
+    elif status == "preview":
+        c = payload["contact"]
+        print(f"→ {ch} to {c['name']} ({payload.get('recipient', '')})")
+        print(f"  \"{payload['text']}\"")
+        why = payload.get("why_chosen", "")
+        print(f"  (dry-run — not sent. channel={payload.get('channel')}, "
+              f"confidence={payload.get('confidence', 0):.2f}, "
+              f"why={why})")
+    elif status == "ambiguous":
+        print(f"✗ Ambiguous: '{payload['reference']}' matched {len(payload['candidates'])} people:")
+        for i, cand in enumerate(payload["candidates"], 1):
+            print(f"  {i}. {cand.get('name', '?')}  id={cand.get('person_id', '?')}")
+        print("  → re-run with a more specific name or pass --jid / --phone / --email")
+    elif status == "unresolved":
+        print(f"✗ No person matched '{payload['reference']}'.")
+    elif status == "no_channel":
+        c = payload["contact"]
+        why = payload.get("why_chosen", "")
+        print(f"✗ Found {c['name']} but cannot reach them.")
+        print(f"  {why}")
+        phones = c.get("phones") or []
+        emails = c.get("emails") or []
+        if phones:
+            print(f"  Phones: {', '.join(phones)}")
+        if emails:
+            print(f"  Emails: {', '.join(emails)}")
+    elif status == "adapter_unavailable":
+        print(f"✗ {ch} adapter is not available (bridge down or not installed).")
+    elif status == "send_failed":
+        print(f"✗ Send failed via {ch} to {payload.get('recipient')}")
+    elif status == "bad_args":
+        print(f"✗ {payload['error']}")
+
+
+# ── Stdin reading ────────────────────────────────────────────────────
+
+def _read_text_arg(args: argparse.Namespace) -> str | None:
+    if args.text is not None:
+        return args.text
+    if not sys.stdin.isatty():
+        data = sys.stdin.read().strip()
+        return data or None
+    return None
+
+
+# ── Adapter send dispatch ────────────────────────────────────────────
+
+def _send_via_adapter(channel: str, recipient: str, text: str, **kwargs) -> tuple[bool, str]:
+    """Load the channel adapter and send. Returns (success, error_msg)."""
+    adapter = _load_adapter(channel)
+    if adapter is None:
+        return False, f"adapter for {channel} not installed"
+    if not adapter.can_send:
+        return False, f"{channel} adapter does not support sending"
+    if not adapter.is_available():
+        return False, f"{channel} adapter not available (bridge down?)"
+
+    # Normalize recipient for WhatsApp (strip JID suffix → digits only)
+    if channel == "whatsapp" and "@" in recipient:
+        recipient = re.sub(r"@.*$", "", recipient)
+
+    try:
+        if channel == "email":
+            success = adapter.send_message(recipient, text, subject=kwargs.get("subject"))
+        else:
+            success = adapter.send_message(recipient, text)
+    except Exception as e:
+        return False, str(e)
+
+    return success, "" if success else "adapter rejected the send"
+
+
+# ── Main ─────────────────────────────────────────────────────────────
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        prog="message-person",
+        description="Resolve a person by name and send them a message.",
+    )
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--to", help="Person reference (name, alias, nickname).")
+    target.add_argument("--jid", help="WhatsApp JID (bypass resolver).")
+    target.add_argument("--phone", help="Phone number (bypass resolver; routes to imessage/whatsapp).")
+    target.add_argument("--email", help="Email address (bypass resolver; routes to email).")
+
+    parser.add_argument("--text", help="Message body. If omitted, reads stdin.")
+    parser.add_argument("--subject", help="Email subject line (email channel only).")
+    parser.add_argument(
+        "--channel",
+        default="auto",
+        choices=["auto"] + list(ALL_CHANNELS),
+        help="Channel to send on (default: auto — picks the best available).",
+    )
+    parser.add_argument(
+        "--hint",
+        help="Operator verb hint for auto-pick (text, whatsapp, dm, email, etc.).",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Resolve, pick channel, and preview only — do not send.",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit a machine-readable JSON payload.",
+    )
+    parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0.6,
+        help="Minimum resolver confidence to auto-select (default: 0.6).",
+    )
+    parser.add_argument(
+        "--no-draft",
+        action="store_true",
+        help="Skip writing to the drafts log.",
+    )
+
+    args = parser.parse_args()
+
+    text = _read_text_arg(args)
+    if not text and not args.dry_run:
+        _emit({"status": "bad_args", "error": "No message text. Pass --text or pipe via stdin."}, args.json)
+        return 3
+    if not text:
+        text = ""
+
+    # ── Resolve the recipient ─────────────────────────────────────
+    contact: dict = {}
+    confidence = 1.0
+    tier = -1
+
+    if args.to:
+        result = resolve_contact(args.to)
+        if not result.get("resolved"):
+            candidates = result.get("candidates") or []
+            if candidates and len(candidates) > 1:
+                _emit({
+                    "status": "ambiguous",
+                    "reference": args.to,
+                    "candidates": [
+                        {"person_id": c.get("person_id"), "name": c.get("name") or c.get("canonical_name")}
+                        for c in candidates
+                    ],
+                }, args.json)
+                return 2
+            _emit({"status": "unresolved", "reference": args.to}, args.json)
+            return 2
+
+        confidence = float(result.get("confidence", 0.0))
+        tier = int(result.get("tier", -1))
+        if confidence < args.min_confidence:
+            _emit({
+                "status": "ambiguous",
+                "reference": args.to,
+                "candidates": [_shape_contact(result.get("contact") or {})],
+                "reason": f"confidence {confidence:.2f} below threshold {args.min_confidence}",
+            }, args.json)
+            return 2
+
+        contact = result.get("contact") or {}
+
+    elif args.jid:
+        contact = {"name": args.jid, "wa_jid": args.jid, "phones": [], "emails": []}
+    elif args.phone:
+        contact = {"name": args.phone, "phones": [args.phone], "emails": []}
+    elif args.email:
+        contact = {"name": args.email, "emails": [args.email], "phones": []}
+
+    # ── Pick channel ──────────────────────────────────────────────
+    # Bypass flags imply a default channel unless overridden
+    effective_channel = args.channel
+    if effective_channel == "auto":
+        if args.jid:
+            effective_channel = "whatsapp"
+        elif args.email:
+            effective_channel = "email"
+
+    if effective_channel == "auto":
+        chosen, why_chosen = _pick_channel(contact, hint=args.hint)
+    else:
+        chosen = effective_channel
+        why_chosen = f"explicit --channel {effective_channel}" if args.channel != "auto" else f"inferred from --{'jid' if args.jid else 'email'}"
+
+    if chosen == "none":
+        _emit({
+            "status": "no_channel",
+            "channel": "auto",
+            "why_chosen": why_chosen,
+            "contact": _shape_contact(contact),
+        }, args.json)
+        return 2
+
+    recipient = _recipient_for(contact, chosen)
+    if not recipient:
+        _emit({
+            "status": "no_channel",
+            "channel": chosen,
+            "why_chosen": why_chosen,
+            "contact": _shape_contact(contact),
+        }, args.json)
+        return 2
+
+    # ── Preview / draft ───────────────────────────────────────────
+    preview = {
+        "status": "preview",
+        "channel": chosen,
+        "chosen_channel": chosen,
+        "why_chosen": why_chosen,
+        "contact": _shape_contact(contact),
+        "recipient": recipient,
+        "text": text,
+        "confidence": confidence,
+        "tier": tier,
+    }
+
+    if not args.no_draft:
+        draft_status = "preview" if args.dry_run else "drafted"
+        draft_id = _log_draft({
+            "status": draft_status,
+            "channel": chosen,
+            "recipient": recipient,
+            "contact_name": (contact.get("name") or ""),
+            "person_id": contact.get("person_id"),
+            "text": text,
+            "subject": args.subject,
+            "why_chosen": why_chosen,
+        })
+        preview["draft_id"] = draft_id
+
+    if args.dry_run:
+        _emit(preview, args.json)
+        return 0
+
+    # ── Send ──────────────────────────────────────────────────────
+    success, error_msg = _send_via_adapter(
+        chosen, recipient, text, subject=args.subject,
+    )
+
+    if not success:
+        # Log the failure
+        if not args.no_draft:
+            _log_draft({
+                "status": "failed",
+                "channel": chosen,
+                "recipient": recipient,
+                "contact_name": contact.get("name") or "",
+                "person_id": contact.get("person_id"),
+                "text": text,
+                "error": error_msg,
+            })
+
+        if "not available" in error_msg or "bridge down" in error_msg:
+            _emit({"status": "adapter_unavailable", "channel": chosen}, args.json)
+        else:
+            _emit({
+                "status": "send_failed",
+                "channel": chosen,
+                "recipient": recipient,
+                "contact": _shape_contact(contact),
+                "error": error_msg,
+            }, args.json)
+        return 1
+
+    # Log the success
+    sent_payload = {
+        "status": "sent",
+        "channel": chosen,
+        "chosen_channel": chosen,
+        "why_chosen": why_chosen,
+        "contact": _shape_contact(contact),
+        "recipient": recipient,
+        "text": text,
+    }
+
+    if not args.no_draft:
+        draft_id = _log_draft({
+            "status": "sent",
+            "channel": chosen,
+            "recipient": recipient,
+            "contact_name": contact.get("name") or "",
+            "person_id": contact.get("person_id"),
+            "text": text,
+        })
+        sent_payload["draft_id"] = draft_id
+
+    _emit(sent_payload, args.json)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
