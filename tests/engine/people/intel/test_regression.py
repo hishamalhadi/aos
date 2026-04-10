@@ -37,6 +37,7 @@ def _profile(
     days_since_last: int | None = None,
     dominant_pattern: str = "none",
     recent_volume: int = 0,
+    recent_outbound: int = 0,
     burstiness: float | None = None,
     evening_ratio: float = 0.0,
     response_reciprocity: float = 0.5,
@@ -52,6 +53,7 @@ def _profile(
     p.days_since_last = days_since_last
     p.dominant_pattern = dominant_pattern
     p.recent_volume = recent_volume
+    p.recent_outbound = recent_outbound
     p.burstiness = burstiness
     p.evening_ratio = evening_ratio
     p.response_reciprocity = response_reciprocity
@@ -64,11 +66,11 @@ def _profile(
 
 
 def test_core_multi_channel_high_density_recent_reciprocal(classifier):
-    """Classic inner circle: 3+ channels, high density, recent, bidirectional."""
+    """Classic inner circle: 3+ channels, high density, recent, bidirectional, active outbound."""
     p = _profile(
         total_messages=5000, total_calls=50, channel_count=4,
         density_rank="high", days_since_last=2, recent_volume=500,
-        response_reciprocity=0.45,
+        response_reciprocity=0.45, recent_outbound=10,
     )
     result = classifier.classify(p)
     assert result.tier == Tier.CORE
@@ -79,7 +81,18 @@ def test_core_rejected_without_reciprocity(classifier):
     p = _profile(
         total_messages=5000, channel_count=3,
         density_rank="high", days_since_last=1, recent_volume=500,
-        response_reciprocity=0.05,  # almost entirely inbound
+        response_reciprocity=0.05, recent_outbound=1,
+    )
+    result = classifier.classify(p)
+    assert result.tier != Tier.CORE
+
+
+def test_core_rejected_without_recent_outbound(classifier):
+    """Good all-time reciprocity but 0 outbound recently → not core."""
+    p = _profile(
+        total_messages=5000, channel_count=3,
+        density_rank="high", days_since_last=1, recent_volume=500,
+        response_reciprocity=0.45, recent_outbound=0,
     )
     result = classifier.classify(p)
     assert result.tier != Tier.CORE

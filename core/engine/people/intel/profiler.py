@@ -95,6 +95,7 @@ class PersonProfile:
 
     # Recency
     recent_volume: int = 0              # communication acts in last 90 days
+    recent_outbound: int = 0            # outbound acts in last 90 days
 
     # Behavioral features
     burstiness: float | None = None     # CV of monthly message counts (high=bursty, low=steady)
@@ -267,7 +268,10 @@ class ProfileBuilder:
         if signals is None:
             return None
         circles = self._load_circles(person_id)
-        return self._assemble(signals, circles)
+        profile = self._assemble(signals, circles)
+        # Enrich with relationship_state data (recent outbound)
+        self._enrich_from_relationship_state(profile)
+        return profile
 
     def build_all(
         self, person_ids: list[str] | None = None
@@ -491,6 +495,21 @@ class ProfileBuilder:
         profile.density_rank = self._rank_density(profile.density_score)
 
         return profile
+
+    def _enrich_from_relationship_state(self, profile: PersonProfile) -> None:
+        """Pull recent outbound from relationship_state (computed by extraction pipeline)."""
+        try:
+            conn = sqlite3.connect(str(self.db_path))
+            conn.row_factory = sqlite3.Row
+            row = conn.execute(
+                "SELECT outbound_30d FROM relationship_state WHERE person_id = ?",
+                (profile.person_id,),
+            ).fetchone()
+            if row and row["outbound_30d"]:
+                profile.recent_outbound = row["outbound_30d"]
+            conn.close()
+        except Exception:
+            pass  # Graceful — profile still works without this enrichment
 
     def _compute_density(self, profile: PersonProfile) -> float:
         # Recent volume (50%): communication acts in last 90 days.

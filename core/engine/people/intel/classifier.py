@@ -121,15 +121,20 @@ class RuleClassifier:
         if profile.density_rank == "minimal":
             return Tier.DORMANT
 
-        # 3. CORE — multi-channel, high density, very recent, with reciprocity.
-        #    Reciprocity check prevents one-way group-chat contacts from reaching CORE.
+        # 3. CORE — multi-channel, high density, very recent, actively messaging.
+        #    Requires BOTH all-time reciprocity AND recent outbound activity.
+        #    This prevents one-way group-chat contacts and historically-active-
+        #    but-now-silent contacts from reaching CORE.
         reciprocity = getattr(profile, "response_reciprocity", 0.5)
-        is_reciprocal = reciprocity >= 0.15  # at least 15% of comms are outbound
+        recent_outbound = getattr(profile, "recent_outbound", 0)
+        is_reciprocal = reciprocity >= 0.15  # at least 15% of all-time comms are outbound
+        has_recent_outbound = recent_outbound > 0  # sent at least 1 message in last 30 days
         if (
             profile.channel_count >= CORE_MIN_CHANNELS
             and _rank_at_least(profile.density_rank, CORE_MIN_DENSITY_RANK)
             and days <= CORE_MAX_DAYS_SINCE
             and is_reciprocal
+            and has_recent_outbound
         ):
             return Tier.CORE
 
