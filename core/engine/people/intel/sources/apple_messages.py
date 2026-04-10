@@ -284,6 +284,13 @@ class AppleMessagesAdapter(SignalAdapter):
     def _fetch_messages_for_handles(
         self, conn: sqlite3.Connection, handle_ids: list[int]
     ) -> list[sqlite3.Row]:
+        """Fetch messages for a person's handles, separating 1:1 from group.
+
+        Only counts messages from 1:1 chats (style=45). Group chat messages
+        (style=43) are excluded because they inflate per-person counts —
+        a message from Person B in a group also containing Person A would be
+        counted for Person A, creating false signal.
+        """
         placeholders = ",".join("?" for _ in handle_ids)
         query = f"""
             SELECT DISTINCT
@@ -296,8 +303,10 @@ class AppleMessagesAdapter(SignalAdapter):
                 m.cache_has_attachments AS attached_file_count
             FROM message m
             JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
-            JOIN chat_handle_join chj ON chj.chat_id = cmj.chat_id
+            JOIN chat c ON cmj.chat_id = c.ROWID
+            JOIN chat_handle_join chj ON chj.chat_id = c.ROWID
             WHERE chj.handle_id IN ({placeholders})
+              AND c.style = 45
             ORDER BY m.date ASC
         """
         return conn.execute(query, handle_ids).fetchall()
