@@ -10,13 +10,35 @@ Usage:
 
 import argparse
 import asyncio
+import contextlib
+import io
 import json
+import os
 import re
 import sys
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 
 _TWITTER_RE = re.compile(r'https?://(?:x\.com|twitter\.com)/(\w+)/status/(\d+)')
+
+
+@contextlib.contextmanager
+def _silence_stdout():
+    """Temporarily redirect stdout to /dev/null.
+
+    crawl4ai prints progress banners ([FETCH]..., [SCRAPE].., [COMPLETE]●)
+    directly to stdout regardless of verbose=False. When we're emitting JSON
+    on stdout, those banners corrupt the output stream. Wrap the crawl call
+    in this context manager to silence them, then print the JSON afterward.
+    """
+    old_stdout = sys.stdout
+    devnull = open(os.devnull, "w")
+    try:
+        sys.stdout = devnull
+        yield
+    finally:
+        sys.stdout = old_stdout
+        devnull.close()
 
 
 async def _fetch_tweet_cli(url: str, output_format: str) -> bool:
@@ -80,8 +102,17 @@ async def crawl_single(url: str, output_format: str = "markdown", schema_name: s
 
     config = CrawlerRunConfig(**config_kwargs)
 
-    async with AsyncWebCrawler(config=browser_config) as crawler:
-        result = await crawler.arun(url, config=config)
+    # Silence crawl4ai's progress banners when we're about to emit structured
+    # output (JSON or schema). For human-readable formats the banners are fine.
+    needs_silence = output_format == "json" or bool(schema_name)
+
+    if needs_silence:
+        with _silence_stdout():
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                result = await crawler.arun(url, config=config)
+    else:
+        async with AsyncWebCrawler(config=browser_config) as crawler:
+            result = await crawler.arun(url, config=config)
 
     if not result.success:
         print(json.dumps({"error": f"Failed to crawl {url}", "status": result.status_code}))
@@ -93,11 +124,18 @@ async def crawl_single(url: str, output_format: str = "markdown", schema_name: s
     elif output_format == "html":
         print(result.html or "")
     elif output_format == "json":
+        # Pull title/author from metadata for convenience — the extractor
+        # consumes them as top-level fields.
+        metadata = result.metadata or {}
+        title = metadata.get("title", "") if isinstance(metadata, dict) else ""
+        author = metadata.get("author", "") if isinstance(metadata, dict) else ""
         output = {
             "url": result.url,
             "status": result.status_code,
+            "title": title,
+            "author": author,
             "content": result.markdown.raw_markdown if result.markdown else "",
-            "metadata": result.metadata or {},
+            "metadata": metadata if isinstance(metadata, dict) else {},
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
     else:

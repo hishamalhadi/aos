@@ -496,7 +496,8 @@ CREATE TABLE IF NOT EXISTS intelligence_briefs (
     platform        TEXT,                       -- twitter, youtube, github, hn, blog, arxiv
     title           TEXT NOT NULL,
     summary         TEXT,                       -- auto-generated 2-3 sentence summary
-    content         TEXT,                       -- full extracted markdown
+    content         TEXT,                       -- full extracted markdown (NULL until extracted)
+    content_status  TEXT DEFAULT 'pending',     -- pending, extracting, extracted, failed
     url             TEXT UNIQUE,                -- source URL (dedup key)
     author          TEXT,
     raw_data        TEXT,                       -- JSON: the raw data that was analyzed
@@ -618,6 +619,34 @@ CREATE INDEX IF NOT EXISTS idx_briefs_status ON intelligence_briefs(status);
 CREATE INDEX IF NOT EXISTS idx_briefs_url ON intelligence_briefs(url);
 CREATE INDEX IF NOT EXISTS idx_briefs_platform ON intelligence_briefs(platform);
 CREATE INDEX IF NOT EXISTS idx_briefs_published ON intelligence_briefs(published_at DESC);
+CREATE INDEX IF NOT EXISTS idx_briefs_content_status ON intelligence_briefs(content_status);
+
+-- ============================================================
+-- COMPILATION PROPOSALS (shadow-mode compilation)
+-- ============================================================
+-- Every Haiku compilation pass writes a proposal here first. High-confidence
+-- proposals auto-accept (write to vault immediately); lower-confidence ones
+-- wait for operator approval via the Knowledge UI.
+
+CREATE TABLE IF NOT EXISTS compilation_proposals (
+    id               TEXT PRIMARY KEY,
+    created_at       TEXT NOT NULL,
+    source           TEXT NOT NULL DEFAULT 'intelligence_brief',  -- intelligence_brief, bootstrap, extract_skill
+    source_id        TEXT,
+    status           TEXT NOT NULL DEFAULT 'pending',   -- pending, auto_accepted, approved, rejected
+    auto_accepted    INTEGER NOT NULL DEFAULT 0,        -- 0/1
+    topic_confidence REAL,
+    extraction_json  TEXT,                              -- serialized ExtractionResult
+    compilation_json TEXT,                              -- serialized CompilationResult
+    vault_path       TEXT,                              -- set when applied to vault
+    reviewed_at      TEXT,
+    reviewed_by      TEXT,                              -- auto, operator, <name>
+    reject_reason    TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_proposals_status ON compilation_proposals(status);
+CREATE INDEX IF NOT EXISTS idx_proposals_source ON compilation_proposals(source, source_id);
+CREATE INDEX IF NOT EXISTS idx_proposals_created ON compilation_proposals(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sources_platform ON intelligence_sources(platform);
 
 -- ============================================================

@@ -222,7 +222,10 @@ class LLMClassifier:
         """Return a router instance, lazily importing the real one."""
         if self._router is not None:
             return self._router
-        from core.engine.execution.router import ExecutionRouter
+        try:
+            from engine.execution.router import ExecutionRouter
+        except ImportError:
+            from core.engine.execution.router import ExecutionRouter
         self._router = ExecutionRouter()
         return self._router
 

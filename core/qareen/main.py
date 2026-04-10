@@ -325,6 +325,19 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to register comms adapter")
 
+        # Intelligence adapter — CAPTURE (intelligence_briefs + vault captures)
+        try:
+            from qareen.ontology.adapters.intelligence import IntelligenceAdapter
+
+            intelligence_adapter = IntelligenceAdapter(
+                vault_dir=str(VAULT_DIR),
+                qareen_db_path=str(AOS_DATA / "data" / "qareen.db"),
+            )
+            ontology.register_adapter(ObjectType.CAPTURE, intelligence_adapter)
+            logger.info("Intelligence adapter registered (CAPTURE)")
+        except Exception:
+            logger.exception("Failed to register intelligence adapter")
+
     # -- Initialize audit log --------------------------------------------
 
     if audit_log:
@@ -590,6 +603,20 @@ async def lifespan(app: FastAPI):
         except Exception:
             logger.exception("Failed to start bridge listener")
 
+    # -- WhatsApp desktop watcher (live ChatStorage.sqlite reads) ------------
+    # Polls the macOS WhatsApp Desktop database for new messages and
+    # ingests them directly into comms.db. This is the canonical WhatsApp
+    # ingest path — richer metadata and zero ban risk compared to reading
+    # live events off the whatsmeow bridge.
+
+    whatsapp_watcher_task = None
+    try:
+        from qareen.channels.whatsapp_desktop import start_desktop_watcher
+
+        whatsapp_watcher_task = await start_desktop_watcher(bus)
+    except Exception:
+        logger.exception("Failed to start WhatsApp desktop watcher")
+
     # -- Store in app.state for route access ------------------------------
 
     app.state.ontology = ontology
@@ -636,6 +663,14 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         logger.info("Bridge listener stopped")
+
+    if whatsapp_watcher_task and not whatsapp_watcher_task.done():
+        whatsapp_watcher_task.cancel()
+        try:
+            await whatsapp_watcher_task
+        except asyncio.CancelledError:
+            pass
+        logger.info("WhatsApp desktop watcher stopped")
 
     # Close adapter connections
     if ontology:
@@ -818,6 +853,7 @@ _api_routers = [
     ("qareen.api.connectors", "connectors"),
     ("qareen.api.integrations", "integrations"),
     ("qareen.api.intelligence", "intelligence"),
+    ("qareen.api.knowledge", "knowledge"),
     ("qareen.api.architect", "architect"),
     ("qareen.api.flow_builder", "flow_builder"),
     ("qareen.api.assist", "assist"),
@@ -826,6 +862,7 @@ _api_routers = [
     ("qareen.api.ingest", "ingest"),
     ("qareen.api.models", "models"),
     ("qareen.api.chat", "chat"),
+    ("qareen.api.conversations", "conversations"),
 ]
 
 for module_path, name in _api_routers:

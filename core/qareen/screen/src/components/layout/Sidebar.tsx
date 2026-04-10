@@ -45,8 +45,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Vault',
     items: [
-      { label: 'Intelligence', href: '/intelligence', icon: Radar },
-      { label: 'Knowledge', href: '/vault/knowledge', icon: BookOpen },
+      { label: 'Knowledge', href: '/knowledge', icon: Radar },
+      { label: 'Vault', href: '/vault/knowledge', icon: BookOpen },
       { label: 'Logs', href: '/vault/logs', icon: ScrollText },
     ],
   },

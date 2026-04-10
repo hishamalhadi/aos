@@ -202,6 +202,13 @@ jobs:
     tier: 4
     description: Sends morning intelligence digest to Telegram
 
+  vault-maintenance:
+    command: bash ~/aos/core/bin/internal/cron-wrap vault-maintenance bash ~/aos/core/bin/crons/vault-maintenance
+    at: "04:30"
+    timeout: 1800
+    tier: 4
+    description: Nightly lint pass — orphans, stale docs, topic refresh, synthesis suggestions
+
   people-intel-refresh:
     command: bash ~/aos/core/bin/crons/people-intel-refresh
     at: "02:00"

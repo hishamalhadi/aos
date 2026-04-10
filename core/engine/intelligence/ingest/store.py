@@ -53,10 +53,10 @@ def store_item(db_path: str | Path | None, item: dict) -> bool:
             """
             INSERT INTO intelligence_briefs (
                 id, source_id, created_at, layer, category, platform,
-                title, summary, content, url, author, raw_data,
+                title, summary, content, content_status, url, author, raw_data,
                 key_findings, relevance_score, relevance_tags,
                 published_at, project_id, status, surfaced
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unread', 0)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'unread', 0)
             """,
             (
                 brief_id,
@@ -67,7 +67,8 @@ def store_item(db_path: str | Path | None, item: dict) -> bool:
                 item.get("platform") or "",
                 item.get("title") or "Untitled",
                 item.get("summary") or "",
-                item.get("content") or "",
+                item.get("content"),
+                item.get("content_status") or "pending",
                 url or None,
                 item.get("author") or "",
                 raw_data,
