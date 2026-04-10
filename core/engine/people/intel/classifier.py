@@ -187,7 +187,16 @@ class RuleClassifier:
         if days >= FADING_MIN_DAYS_SINCE and profile.density_rank in ("low", "medium"):
             return Tier.FADING
 
-        # 8. Default — moderate signal, recent enough → ACTIVE.
+        # 8. Low density + no recent activity = FADING, not active.
+        #    This catches the gap between ACTIVE (requires medium+ density, days <= 90)
+        #    and FADING (requires days >= 180). People at 90-180 days with low density
+        #    are fading, not active.
+        if profile.density_rank == "low" and (days > 90 or profile.recent_volume == 0):
+            return Tier.FADING
+
+        # 9. Default — moderate signal, recent enough → ACTIVE.
+        #    Only reaches here if density is medium+ and days <= 90, or similar
+        #    profiles that genuinely indicate ongoing activity.
         return Tier.ACTIVE
 
 

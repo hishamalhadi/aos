@@ -260,12 +260,15 @@ class PersonSignals:
 
     @property
     def channels_active(self) -> list[str]:
-        channels = [c.channel for c in self.communication if c.total_messages > 0]
+        # A channel counts as "active" only with meaningful engagement.
+        # A single message (group broadcast, status reply) doesn't count.
+        MIN_MESSAGES = 3
+        channels = [c.channel for c in self.communication if c.total_messages >= MIN_MESSAGES]
         if self.total_calls > 0:
             channels.append("phone")
-        if self.total_photos > 0:
+        if self.total_photos >= 3:
             channels.append("photos")
-        if self.total_emails > 0:
+        if self.total_emails >= MIN_MESSAGES:
             channels.append("email")
         return channels
 
