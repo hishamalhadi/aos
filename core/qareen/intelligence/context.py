@@ -555,6 +555,8 @@ async def build_briefing(ontology) -> dict[str, Any] | None:
             "drift_alerts": len(drift_alerts),
         }
 
+        knowledge_section = _build_knowledge_briefing_section()
+
         return {
             "id": str(uuid.uuid4())[:8],
             "summary": summary,
@@ -563,9 +565,96 @@ async def build_briefing(ontology) -> dict[str, Any] | None:
             "attention": attention[:8],
             "drift_alerts": drift_alerts,
             "metrics": metrics,
+            "knowledge": knowledge_section,
             "timestamp": datetime.now().isoformat(),
         }
 
     except Exception as e:
         logger.warning("Briefing build failed: %s", e)
         return None
+
+
+def _build_knowledge_briefing_section() -> dict[str, Any]:
+    """Pull intelligence signals for the morning briefing.
+
+    Reads (no LLM, no side effects):
+        - Top 5 unread high-relevance briefs from last 24h
+        - Count of pending compilation proposals (shadow-mode review queue)
+        - Latest vault maintenance report summary if present
+
+    Returns a minimal dict the companion UI can drop straight into its
+    briefing card.
+    """
+    import sqlite3
+    from datetime import timedelta, timezone as _tz
+
+    out: dict[str, Any] = {
+        "top_captures": [],
+        "pending_review": 0,
+        "latest_maintenance": None,
+    }
+
+    db_path = Path.home() / ".aos" / "data" / "qareen.db"
+    if not db_path.exists():
+        return out
+
+    conn = sqlite3.connect(str(db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        yesterday = (datetime.now(_tz.utc) - timedelta(days=1)).isoformat()
+
+        # Top 5 unread high-relevance briefs from last 24h
+        try:
+            rows = conn.execute(
+                """
+                SELECT id, title, platform, relevance_score, url
+                FROM intelligence_briefs
+                WHERE status = 'unread'
+                  AND created_at >= ?
+                  AND relevance_score >= 0.3
+                ORDER BY relevance_score DESC, published_at DESC
+                LIMIT 5
+                """,
+                (yesterday,),
+            ).fetchall()
+            out["top_captures"] = [
+                {
+                    "id": r["id"],
+                    "title": r["title"],
+                    "platform": r["platform"],
+                    "relevance": r["relevance_score"],
+                    "url": r["url"],
+                }
+                for r in rows
+            ]
+        except sqlite3.OperationalError:
+            pass
+
+        # Pending review count
+        try:
+            row = conn.execute(
+                "SELECT COUNT(*) as cnt FROM compilation_proposals WHERE status = 'pending'"
+            ).fetchone()
+            out["pending_review"] = row["cnt"] if row else 0
+        except sqlite3.OperationalError:
+            pass
+    finally:
+        conn.close()
+
+    # Latest maintenance report summary (read from vault/log/)
+    try:
+        from engine.intelligence.lint.report import list_reports
+    except ImportError:
+        try:
+            from core.engine.intelligence.lint.report import list_reports
+        except Exception:
+            list_reports = None
+    if list_reports:
+        try:
+            reports = list_reports(limit=1)
+            if reports:
+                out["latest_maintenance"] = reports[0]
+        except Exception:
+            pass
+
+    return out

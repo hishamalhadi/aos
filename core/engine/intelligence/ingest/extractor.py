@@ -1,117 +1,44 @@
-"""extractor — Extract full content from URLs using the crawler CLI."""
+"""Legacy extractor shim — delegates to the content router.
 
-import asyncio
-import json
-from pathlib import Path
+Historical note: this module used to shell out to crawl_cli.py directly.
+Part 2 of the intelligence pipeline rework moved that logic to
+`core.engine.intelligence.content.router`, which unifies all extraction
+backends behind one entry point.
 
-# Path to the crawler CLI, executed via the crawler venv's Python
-CRAWLER_VENV_PYTHON = Path.home() / ".aos" / "services" / "crawler" / ".venv" / "bin" / "python"
+This shim keeps the old `extract_content(url, platform)` signature alive
+for backward compatibility, but all new code should call
+`router.extract(url)` directly and handle ExtractionResult / ExtractionError.
+"""
 
-# Resolve CLI path: try runtime (~/aos/) first, fall back to dev workspace (~/project/aos/)
-_RUNTIME_CLI = Path.home() / "aos" / "core" / "services" / "crawler" / "crawl_cli.py"
-_DEV_CLI = Path.home() / "project" / "aos" / "core" / "services" / "crawler" / "crawl_cli.py"
-CRAWLER_CLI = _RUNTIME_CLI if _RUNTIME_CLI.exists() else _DEV_CLI
+from __future__ import annotations
 
-# Timeout per URL extraction
-EXTRACT_TIMEOUT = 30  # seconds
+import logging
+
+from ..content import router
+from ..content.result import ExtractionError
+
+logger = logging.getLogger(__name__)
 
 
 async def extract_content(url: str, platform: str = "") -> dict | None:
-    """Extract content from a URL using the crawler CLI.
+    """Extract content from a URL via the router.
 
-    Calls: crawl_cli.py URL --format json
-    Parses the JSON output and returns:
-        {content: str, author: str, title: str, metadata: dict}
-    Returns None on failure.
+    Returns the legacy dict shape on success:
+        {content, author, title, metadata}
+    Returns None on failure (matches the old behavior — callers expected None
+    to mean "extraction failed, move on").
     """
     if not url:
         return None
-
-    # Verify the crawler venv exists
-    if not CRAWLER_VENV_PYTHON.exists():
-        print(f"[extractor] Crawler venv not found: {CRAWLER_VENV_PYTHON}")
-        return None
-
-    if not CRAWLER_CLI.exists():
-        print(f"[extractor] Crawler CLI not found: {CRAWLER_CLI}")
-        return None
-
     try:
-        proc = await asyncio.create_subprocess_exec(
-            str(CRAWLER_VENV_PYTHON),
-            str(CRAWLER_CLI),
-            url,
-            "--format", "json",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(),
-            timeout=EXTRACT_TIMEOUT,
-        )
-
-        if proc.returncode != 0:
-            err_msg = stderr.decode().strip()[:200] if stderr else "unknown error"
-            print(f"[extractor] Crawler failed for {url}: {err_msg}")
-            return None
-
-        raw = stdout.decode().strip()
-        if not raw:
-            print(f"[extractor] Empty output for {url}")
-            return None
-
-        data = json.loads(raw)
-        return _normalize_output(data, platform)
-
-    except asyncio.TimeoutError:
-        print(f"[extractor] Timeout extracting {url}")
-        # Kill the process if it's still running
-        try:
-            proc.kill()
-        except Exception:
-            pass
+        result = await router.extract(url)
+    except ExtractionError as e:
+        logger.warning("extract_content failed for %s: %s", url, e)
         return None
-    except json.JSONDecodeError as e:
-        print(f"[extractor] Invalid JSON from crawler for {url}: {e}")
-        return None
-    except Exception as e:
-        print(f"[extractor] Error extracting {url}: {e}")
-        return None
-
-
-def _normalize_output(data: dict, platform: str) -> dict:
-    """Normalize crawler output into a consistent format.
-
-    The crawler CLI returns different shapes for tweets vs web pages:
-    - Tweet: {url, author, handle, text, created_at, likes, ...}
-    - Web:   {url, status, content, metadata}
-    """
-    # Twitter/X tweet format
-    if "text" in data and "handle" in data:
-        author_name = data.get("author", "")
-        handle = data.get("handle", "")
-        author = f"{author_name} (@{handle})" if author_name else handle
-        return {
-            "content": data.get("text", ""),
-            "author": author,
-            "title": f"Tweet by {author}",
-            "metadata": {
-                "likes": data.get("likes", 0),
-                "retweets": data.get("retweets", 0),
-                "views": data.get("views", 0),
-                "created_at": data.get("created_at", ""),
-            },
-        }
-
-    # Standard web page format
-    metadata = data.get("metadata", {})
-    title = metadata.get("title", "") if isinstance(metadata, dict) else ""
-    author = metadata.get("author", "") if isinstance(metadata, dict) else ""
 
     return {
-        "content": data.get("content", ""),
-        "author": author,
-        "title": title,
-        "metadata": metadata if isinstance(metadata, dict) else {},
+        "content": result.content,
+        "author": result.author,
+        "title": result.title,
+        "metadata": result.metadata,
     }

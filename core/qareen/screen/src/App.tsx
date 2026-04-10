@@ -1,6 +1,7 @@
-import { lazy } from 'react';
+import { lazy, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Layout from '@/components/layout/Layout';
+import { migrateLegacyChatIfNeeded } from '@/lib/migrateLegacyChat';
 
 // ── Primary surfaces ──
 const Home = lazy(() => import('@/pages/Companion'));
@@ -27,13 +28,16 @@ const AgentConfig = lazy(() => import('@/pages/AgentConfig'));
 const IntelligenceFeed = lazy(() => import('@/pages/IntelligenceFeed'));
 const IntelligenceDetail = lazy(() => import('@/pages/IntelligenceDetail'));
 const IntelligenceSources = lazy(() => import('@/pages/IntelligenceSources'));
+const Knowledge = lazy(() => import('@/pages/Knowledge'));
 
 // ── Review: pages with real UI, kept for evaluation ──
-const Meeting = lazy(() => import('@/pages/Meeting'));
 const Calendar = lazy(() => import('@/pages/Calendar'));
 const Approvals = lazy(() => import('@/pages/Approvals'));
 
 export default function App() {
+  // One-time migration: move legacy chat localStorage → SQLite conversations
+  useEffect(() => { migrateLegacyChatIfNeeded() }, []);
+
   return (
     <Routes>
       <Route element={<Layout />}>
@@ -57,8 +61,15 @@ export default function App() {
         <Route path="/integrations" element={<Integrations />} />
         <Route path="/org" element={<Org />} />
 
-        {/* ── Intelligence feed ── */}
-        <Route path="/intelligence" element={<IntelligenceFeed />} />
+        {/* ── Knowledge — unified home for intelligence, library, topics, pipeline ── */}
+        <Route path="/knowledge" element={<Knowledge />} />
+        <Route path="/knowledge/feed" element={<Knowledge />} />
+        <Route path="/knowledge/library" element={<Knowledge />} />
+        <Route path="/knowledge/topics" element={<Knowledge />} />
+        <Route path="/knowledge/pipeline" element={<Knowledge />} />
+
+        {/* ── Legacy intelligence routes — redirect to Knowledge ── */}
+        <Route path="/intelligence" element={<Navigate to="/knowledge/feed" replace />} />
         <Route path="/intelligence/sources" element={<IntelligenceSources />} />
         <Route path="/intelligence/:id" element={<IntelligenceDetail />} />
 
@@ -67,7 +78,7 @@ export default function App() {
         <Route path="/sessions/:id" element={<SessionDetail />} />
 
         {/* ── Review: pages kept for evaluation ── */}
-        <Route path="/meeting" element={<Meeting />} />
+        {/* meeting route removed — companion sessions handle all session types */}
         <Route path="/calendar" element={<Calendar />} />
 
         <Route path="/approvals" element={<Approvals />} />

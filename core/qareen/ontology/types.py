@@ -40,6 +40,10 @@ class ObjectType(str, Enum):
     TRANSACTION = "transaction"
     PROCEDURE = "procedure"
     CONVERSATION = "conversation"
+    # A vault-saved piece of external content (intelligence feed, extract skill,
+    # ramble, bridge forward). Distinct from NOTE: a CAPTURE always has an
+    # external source_url and may be backed by an intelligence_briefs row.
+    CAPTURE = "capture"
 
 
 class TaskStatus(str, Enum):
@@ -352,6 +356,29 @@ class Note:
     review_interval_days: int | None = None
     next_review: datetime | None = None
     is_archived: bool = False
+
+
+@dataclass
+class Capture:
+    """A vault-saved piece of external content.
+
+    Captures come from the intelligence feed, extract skill, ramble,
+    bridge forwards, etc. They always point at an external source
+    (source_url) and are persisted as markdown in ~/vault/knowledge/captures/.
+    A CAPTURE may also be backed by an intelligence_briefs row when it
+    was promoted from the intelligence engine.
+    """
+    id: str  # brief id (short hex) or filename stem
+    title: str
+    source_url: str | None = None
+    platform: str | None = None  # twitter, youtube, github, hn, blog, etc.
+    vault_path: str | None = None  # relative to vault root
+    created_at: datetime | None = None
+    author: str | None = None
+    summary: str | None = None
+    tags: list[str] = field(default_factory=list)
+    project: str | None = None
+    brief_id: str | None = None  # link back to intelligence_briefs row, if any
 
 
 @dataclass
