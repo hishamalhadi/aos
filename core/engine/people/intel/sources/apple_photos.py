@@ -226,13 +226,55 @@ class ApplePhotosAdapter(SignalAdapter):
     ) -> dict[str, int]:
         """Resolve person_id → ZPERSON.Z_PK for every matched person.
 
-        Match rules:
-          1. ZFULLNAME equals person's name (case-insensitive), OR
-          2. ZDISPLAYNAME equals person's first name (case-insensitive)
-             AND there is exactly one such ZPERSON in the library.
+        Uses the universal NameIndex (checks canonical_name, display_name,
+        nickname, aliases, and phonetic variants like idris↔idrees) to
+        match ZPERSON.ZFULLNAME and ZDISPLAYNAME to people.db rows.
 
         Only persons with ZFACECOUNT >= 1 are considered.
         """
+        # Build a NameIndex from the person_index dict (controlled by caller
+        # and tests). Supplement with aliases from people.db when available.
+        try:
+            from core.engine.people.name_matcher import NameIndex
+
+            name_idx = NameIndex()
+            for pid, info in person_index.items():
+                name = info.get("name", "")
+                first = name.split()[0] if name.split() else ""
+                name_idx.add_person(
+                    pid=pid,
+                    canonical_name=name,
+                    display_name=None,
+                    nickname=None,
+                    first_name=first,
+                    last_name=None,
+                    aliases=None,
+                )
+
+            # Enrich with aliases from people.db (best-effort)
+            import sqlite3 as _sql
+            people_db = Path.home() / ".aos" / "data" / "people.db"
+            if people_db.exists():
+                pconn = _sql.connect(str(people_db))
+                pconn.row_factory = _sql.Row
+                try:
+                    for r in pconn.execute("SELECT alias, person_id FROM aliases"):
+                        if r["person_id"] in person_index:
+                            name_idx._add(r["alias"].lower().strip(), r["person_id"])
+                    # Also add display_name and nickname from people table
+                    for r in pconn.execute(
+                        "SELECT id, display_name, nickname FROM people WHERE is_archived=0"
+                    ):
+                        if r["id"] in person_index:
+                            if r["display_name"]:
+                                name_idx._add(r["display_name"].lower().strip(), r["id"])
+                            if r["nickname"]:
+                                name_idx._add(r["nickname"].lower().strip(), r["id"])
+                finally:
+                    pconn.close()
+        except Exception:
+            name_idx = None
+
         try:
             rows = conn.execute(
                 """
@@ -245,39 +287,52 @@ class ApplePhotosAdapter(SignalAdapter):
             log.warning("apple_photos: ZPERSON query failed: %s", e)
             return {}
 
-        by_fullname: dict[str, list[int]] = {}
-        by_displayname: dict[str, list[int]] = {}
+        # Build ZPERSON pk → (fullname, displayname) map for reverse lookup
+        zperson_names: dict[int, tuple[str, str]] = {}
         for r in rows:
             pk = int(r["Z_PK"])
-            full = (r["ZFULLNAME"] or "").strip().lower()
-            disp = (r["ZDISPLAYNAME"] or "").strip().lower()
-            if full:
-                by_fullname.setdefault(full, []).append(pk)
-            if disp:
-                by_displayname.setdefault(disp, []).append(pk)
+            full = (r["ZFULLNAME"] or "").strip()
+            disp = (r["ZDISPLAYNAME"] or "").strip()
+            zperson_names[pk] = (full, disp)
 
         resolved: dict[str, int] = {}
-        for pid, info in person_index.items():
-            name = (info.get("name") or "").strip()
-            if not name:
-                continue
-            lower = name.lower()
-            first = lower.split()[0] if lower.split() else ""
 
-            # Rule 1: exact full-name match.
-            full_hits = by_fullname.get(lower) or []
-            if len(full_hits) == 1:
-                resolved[pid] = full_hits[0]
-                continue
-            if len(full_hits) > 1:
-                # Ambiguous full-name match — skip, do not guess.
-                continue
+        if name_idx is not None:
+            # Strategy: for each ZPERSON, use the universal matcher to find
+            # which person_id it corresponds to. Then for each person in
+            # person_index, check if we found their ZPERSON pk.
+            zpk_to_pid: dict[int, str] = {}
+            for zpk, (full, disp) in zperson_names.items():
+                pid = name_idx.match_any(full, disp)
+                if pid and pid in person_index:
+                    zpk_to_pid[zpk] = pid
 
-            # Rule 2: first-name match with uniqueness.
-            if first:
-                disp_hits = by_displayname.get(first) or []
-                if len(disp_hits) == 1:
-                    resolved[pid] = disp_hits[0]
+            for zpk, pid in zpk_to_pid.items():
+                if pid not in resolved:
+                    resolved[pid] = zpk
+        else:
+            # Fallback: legacy exact-match if name_matcher unavailable
+            by_fullname: dict[str, list[int]] = {}
+            by_displayname: dict[str, list[int]] = {}
+            for pk, (full, disp) in zperson_names.items():
+                if full:
+                    by_fullname.setdefault(full.lower(), []).append(pk)
+                if disp:
+                    by_displayname.setdefault(disp.lower(), []).append(pk)
+            for pid, info in person_index.items():
+                name = (info.get("name") or "").strip()
+                if not name:
+                    continue
+                lower = name.lower()
+                first = lower.split()[0] if lower.split() else ""
+                full_hits = by_fullname.get(lower) or []
+                if len(full_hits) == 1:
+                    resolved[pid] = full_hits[0]
+                    continue
+                if first:
+                    disp_hits = by_displayname.get(first) or []
+                    if len(disp_hits) == 1:
+                        resolved[pid] = disp_hits[0]
 
         return resolved
 
