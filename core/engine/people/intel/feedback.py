@@ -205,6 +205,93 @@ class ClassificationStore:
         finally:
             conn.close()
 
+    # ── Tier → Importance sync ──
+
+    # Authoritative mapping from intel tier to people.importance.
+    # The intel classifier is the single source of truth for importance.
+    TIER_TO_IMPORTANCE: dict[str, int] = {
+        "core": 1,
+        "active": 2,
+        "emerging": 2,
+        "channel_specific": 3,
+        "fading": 3,
+        "dormant": 4,
+        "unknown": 4,
+    }
+
+    def sync_importance(self) -> dict[str, int]:
+        """Sync person_classification.tier → people.importance.
+
+        Reads the latest tier for every classified person and updates
+        people.importance to match. Respects:
+        - pinned_importance: if set, importance stays at pinned value
+        - is_self: operator's own row is never auto-classified
+        - lifecycle_state: deceased/archived people are not reclassified
+
+        Returns stats dict.
+        """
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        stats = {
+            "promoted": 0, "demoted": 0, "unchanged": 0,
+            "skipped_self": 0, "skipped_pinned": 0, "skipped_lifecycle": 0,
+        }
+        try:
+            rows = conn.execute("""
+                SELECT pc.person_id, pc.tier, p.importance, p.is_self,
+                       p.pinned_importance, p.lifecycle_state
+                FROM person_classification pc
+                JOIN people p ON pc.person_id = p.id
+            """).fetchall()
+
+            now = int(time.time())
+            for row in rows:
+                if row["is_self"]:
+                    stats["skipped_self"] += 1
+                    continue
+
+                if row["pinned_importance"] is not None:
+                    # Pinned — ensure importance matches pin, don't auto-classify
+                    if row["importance"] != row["pinned_importance"]:
+                        conn.execute(
+                            "UPDATE people SET importance = ?, updated_at = ? WHERE id = ?",
+                            (row["pinned_importance"], now, row["person_id"]),
+                        )
+                    stats["skipped_pinned"] += 1
+                    continue
+
+                if row["lifecycle_state"] in ("deceased", "archived"):
+                    stats["skipped_lifecycle"] += 1
+                    continue
+
+                new_imp = self.TIER_TO_IMPORTANCE.get(row["tier"], 4)
+                old_imp = row["importance"] or 3
+
+                if new_imp == old_imp:
+                    stats["unchanged"] += 1
+                    continue
+
+                conn.execute(
+                    "UPDATE people SET importance = ?, updated_at = ? WHERE id = ?",
+                    (new_imp, now, row["person_id"]),
+                )
+                if new_imp < old_imp:
+                    stats["promoted"] += 1
+                else:
+                    stats["demoted"] += 1
+
+            conn.commit()
+        finally:
+            conn.close()
+
+        logger.info(
+            "sync_importance: promoted=%d demoted=%d unchanged=%d "
+            "pinned=%d self=%d lifecycle=%d",
+            stats["promoted"], stats["demoted"], stats["unchanged"],
+            stats["skipped_pinned"], stats["skipped_self"], stats["skipped_lifecycle"],
+        )
+        return stats
+
     # ── Feedback CRUD ──
 
     def record_feedback(

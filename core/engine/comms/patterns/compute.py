@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 
 # People DB access
-_PEOPLE_SERVICE = Path.home() / ".aos" / "services" / "people"
+_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
 sys.path.insert(0, str(_PEOPLE_SERVICE))
 
 import db as people_db
@@ -273,42 +273,11 @@ def run_compute(person_ids: list[str] | None = None, dry_run: bool = False) -> d
                     )
             patterns_written += 1
 
-        # 2. Classify importance
-        new_importance = classify_importance(conn, pid)
-        if new_importance is not None:
-            current = conn.execute(
-                "SELECT importance FROM people WHERE id = ?", (pid,)
-            ).fetchone()
-            if current:
-                old_importance = current["importance"]
-                should_update = False
-
-                # Transactional override: businesses ALWAYS get demoted to 4
-                # regardless of current importance. "14th Street Pizza" at imp=2 is wrong.
-                if new_importance == 4 and is_transactional(conn, pid):
-                    should_update = True
-
-                # Promote acquaintance/peripheral to active/inner
-                elif old_importance >= 3 and new_importance < old_importance:
-                    should_update = True
-
-                # Reclassify within same tier range
-                elif old_importance >= 3 and new_importance != old_importance:
-                    should_update = True
-
-                # Default (5) → anything
-                elif old_importance == 5 and new_importance <= 4:
-                    should_update = True
-
-                if should_update:
-                    if not dry_run:
-                        conn.execute(
-                            "UPDATE people SET importance = ?, updated_at = ? WHERE id = ?",
-                            (new_importance, ts, pid),
-                        )
-                    importance_changed += 1
-                    if new_importance == 4 and is_transactional(conn, pid):
-                        transactional_flagged += 1
+        # NOTE: Importance classification has been moved to the intel pipeline.
+        # The intel classifier (core/engine/people/intel/classifier.py) uses
+        # multi-channel signal data and writes tier → importance via
+        # ClassificationStore.sync_importance(). This pipeline only computes
+        # communication patterns now.
 
     if not dry_run:
         conn.commit()
@@ -318,14 +287,10 @@ def run_compute(person_ids: list[str] | None = None, dry_run: bool = False) -> d
     summary = {
         "people_processed": len(all_pids),
         "patterns_written": patterns_written,
-        "importance_changed": importance_changed,
-        "transactional_flagged": transactional_flagged,
         "dry_run": dry_run,
     }
 
     log.info(f"  Patterns: {patterns_written} written")
-    log.info(f"  Importance: {importance_changed} reclassified")
-    log.info(f"  Transactional: {transactional_flagged} flagged")
 
     return summary
 

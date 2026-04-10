@@ -249,6 +249,15 @@ class ClassifierRunner:
                 report.tier_distribution.get(tier_key, 0) + 1
             )
 
+        # Sync tier → people.importance after all classifications are saved.
+        if not dry_run:
+            try:
+                sync_stats = self.store.sync_importance()
+                logger.info("Importance sync: %s", sync_stats)
+            except Exception as e:
+                logger.exception("sync_importance failed: %s", e)
+                report.errors.append({"sync_importance": str(e)})
+
         report.estimated_cost_usd = round(actual_spend if with_llm else 0.0, 4)
         report.duration_seconds = round(time.time() - start, 2)
         return report

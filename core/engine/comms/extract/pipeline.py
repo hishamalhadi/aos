@@ -21,7 +21,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # People DB access
-_PEOPLE_SERVICE = Path.home() / ".aos" / "services" / "people"
+_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
 sys.path.insert(0, str(_PEOPLE_SERVICE))
 
 import db as people_db
@@ -345,8 +345,8 @@ def compute_relationship_state(conn):
             SUM(CASE WHEN occurred_at >= ? THEN 1 ELSE 0 END) as count_30d,
             SUM(CASE WHEN occurred_at >= ? THEN 1 ELSE 0 END) as count_90d,
             SUM(CASE WHEN occurred_at >= ? THEN msg_count ELSE 0 END) as msgs_30d,
-            SUM(CASE WHEN direction = 'outbound' AND occurred_at >= ? THEN msg_count ELSE 0 END) as out_30d,
-            SUM(CASE WHEN direction = 'inbound' AND occurred_at >= ? THEN msg_count ELSE 0 END) as in_30d
+            SUM(CASE WHEN direction IN ('outbound', 'both') AND occurred_at >= ? THEN msg_count ELSE 0 END) as out_30d,
+            SUM(CASE WHEN direction IN ('inbound', 'both') AND occurred_at >= ? THEN msg_count ELSE 0 END) as in_30d
         FROM interactions
         GROUP BY person_id
     """, (

@@ -755,7 +755,7 @@ def handle_reply(text: str) -> str:
 
     # Resolve contact
     import sys
-    people_service = str(Path.home() / ".aos" / "services" / "people")
+    people_service = str(Path.home() / "aos" / "core" / "engine" / "people")
     if people_service not in sys.path:
         sys.path.insert(0, people_service)
 
@@ -1050,7 +1050,7 @@ def handle_proposals(text: str) -> str:
 
     _aos_dev = str(Path.home() / "project" / "aos")
     _aos_root = str(Path.home() / "aos")
-    _people = str(Path.home() / ".aos" / "services" / "people")
+    _people = str(Path.home() / "aos" / "core" / "engine" / "people")
     for p in [_aos_dev, _aos_root, _people]:
         if p not in sys.path:
             sys.path.insert(0, p)

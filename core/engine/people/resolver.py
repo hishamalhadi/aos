@@ -27,13 +27,9 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
-import sys
 import time
 from pathlib import Path
-
-_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
-if str(_PEOPLE_SERVICE) not in sys.path:
-    sys.path.insert(0, str(_PEOPLE_SERVICE))
+from typing import Optional
 
 from db import connect, now_ts
 
@@ -127,12 +123,6 @@ def _build_contact(conn: sqlite3.Connection, person: dict) -> dict:
     phones = []
     emails = []
     wa_jid = None
-    wa_lid = None
-    telegram_id = None
-    telegram_username = None
-    slack_user_id = None
-    slack_team_id = None
-    imessage_handle = None
     for ident in idents:
         t = ident["type"]
         v = ident["value"]
@@ -142,18 +132,6 @@ def _build_contact(conn: sqlite3.Connection, person: dict) -> dict:
             emails.append(v)
         elif t == "wa_jid" and v.endswith("@s.whatsapp.net"):
             wa_jid = v
-        elif t == "whatsapp" and v.endswith("@lid"):
-            wa_lid = v
-        elif t == "telegram_id":
-            telegram_id = v
-        elif t == "telegram_username":
-            telegram_username = v
-        elif t == "slack_user_id":
-            slack_user_id = v
-        elif t == "slack_team_id":
-            slack_team_id = v
-        elif t == "imessage_handle":
-            imessage_handle = v
 
     # Metadata
     meta = _row_to_dict(conn.execute(
@@ -173,12 +151,6 @@ def _build_contact(conn: sqlite3.Connection, person: dict) -> dict:
         "phones": phones,
         "emails": emails,
         "wa_jid": wa_jid,
-        "wa_lid": wa_lid,
-        "telegram_id": telegram_id,
-        "telegram_username": telegram_username,
-        "slack_user_id": slack_user_id,
-        "slack_team_id": slack_team_id,
-        "imessage_handle": imessage_handle,
         "organization": (meta or {}).get("organization", ""),
         "preferred_channel": (meta or {}).get("preferred_channel", ""),
         "city": (meta or {}).get("city", ""),
@@ -309,65 +281,6 @@ def _strip_reference(ref_lower: str) -> list[str]:
         words = ref_lower.split()
         variants.extend(words)
     return variants
-
-
-# ── Priority: strict full-name match ────────────────────────────────
-
-def _tier1_exact_full_name(
-    conn: sqlite3.Connection,
-    ref_lower: str,
-) -> dict | None:
-    """Strict exact match on a multi-word "First Last" reference.
-
-    Returns a resolved result only if exactly one person matches. Used as a
-    priority check before tier 0 to prevent single-word aliases from
-    hijacking full-name queries.
-    """
-    # 1. Exact canonical_name
-    rows = conn.execute(
-        "SELECT * FROM people WHERE canonical_name = ? COLLATE NOCASE",
-        (ref_lower,),
-    ).fetchall()
-    if len(rows) == 1:
-        person = dict(rows[0])
-        contact = _build_contact(conn, person)
-        return _make_result(
-            person_id=person["id"],
-            contact=contact,
-            candidates=[contact],
-            confidence=1.0,
-            tier=1,
-            tier_name="exact_canonical_priority",
-            channel=_resolve_channel(contact),
-            resolved=True,
-        )
-
-    # 2. Exact first_name + last_name (covers canonicals with middle names)
-    parts = ref_lower.split()
-    if len(parts) >= 2:
-        first = parts[0]
-        last = " ".join(parts[1:])
-        rows = conn.execute(
-            "SELECT * FROM people "
-            "WHERE first_name = ? COLLATE NOCASE "
-            "AND last_name = ? COLLATE NOCASE",
-            (first, last),
-        ).fetchall()
-        if len(rows) == 1:
-            person = dict(rows[0])
-            contact = _build_contact(conn, person)
-            return _make_result(
-                person_id=person["id"],
-                contact=contact,
-                candidates=[contact],
-                confidence=1.0,
-                tier=1,
-                tier_name="exact_first_last_priority",
-                channel=_resolve_channel(contact),
-                resolved=True,
-            )
-
-    return None
 
 
 # ── Tier 0: Alias lookup ─────────────────────────────────────────────
@@ -895,16 +808,6 @@ def resolve_contact(
         ref_lower = reference.strip().lower()
         if not ref_lower:
             return _make_result()
-
-        # Priority: exact canonical name / first+last match for multi-word refs.
-        # A multi-word "First Last" reference must never be hijacked by a
-        # single-word alias of the first token. Without this, e.g. resolving
-        # "Faisal Dader" would match the alias `faisal` (pointing at a
-        # different Faisal) before tier 1 got a chance to check the full name.
-        if " " in ref_lower:
-            result = _tier1_exact_full_name(conn, ref_lower)
-            if result and result["resolved"]:
-                return result
 
         # Tier 0: Alias lookup
         result = _tier0_alias(conn, ref_lower)

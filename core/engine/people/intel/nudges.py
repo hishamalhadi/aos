@@ -164,6 +164,8 @@ def gen_birthdays(
         FROM contact_metadata cm
         JOIN people p ON cm.person_id = p.id
         WHERE p.is_archived = 0
+          AND COALESCE(p.lifecycle_state, 'active') NOT IN ('deceased', 'archived', 'merged', 'blocked')
+          AND COALESCE(p.is_self, 0) = 0
           AND cm.birthday IS NOT NULL
           AND length(cm.birthday) >= 10
         """
@@ -233,6 +235,8 @@ def gen_drift(
         JOIN person_classification pc ON pc.person_id = p.id
         JOIN relationship_state rs ON rs.person_id = p.id
         WHERE p.is_archived = 0
+          AND COALESCE(p.lifecycle_state, 'active') NOT IN ('deceased', 'archived', 'merged', 'blocked')
+          AND COALESCE(p.is_self, 0) = 0
           AND pc.tier IN ('core', 'active')
           AND rs.avg_days_between IS NOT NULL
           AND rs.avg_days_between > 0
@@ -296,6 +300,8 @@ def gen_reconnect(
         JOIN person_classification pc ON pc.person_id = p.id
         JOIN relationship_state rs ON rs.person_id = p.id
         WHERE p.is_archived = 0
+          AND COALESCE(p.lifecycle_state, 'active') NOT IN ('deceased', 'archived', 'merged', 'blocked')
+          AND COALESCE(p.is_self, 0) = 0
           AND pc.tier IN ('core', 'active', 'emerging')
           AND rs.last_interaction_at IS NOT NULL
         """

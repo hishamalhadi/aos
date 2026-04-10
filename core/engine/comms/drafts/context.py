@@ -22,7 +22,7 @@ from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_PEOPLE_SERVICE = Path.home() / ".aos" / "services" / "people"
+_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
 STYLE_EDITS_DIR = Path.home() / ".aos" / "work" / "comms" / "style_edits"
 
 
