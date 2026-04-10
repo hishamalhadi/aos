@@ -37,6 +37,11 @@ from pathlib import Path
 for _candidate in (Path.home() / "project" / "aos", Path.home() / "aos"):
     if (_candidate / "core").is_dir():
         sys.path.insert(0, str(_candidate))
+        # Also add the people module path so `from db import` works
+        # (the comms resolver imports db.py from core/engine/people/)
+        _people_mod = _candidate / "core" / "engine" / "people"
+        if _people_mod.is_dir() and str(_people_mod) not in sys.path:
+            sys.path.insert(0, str(_people_mod))
         break
 
 from core.engine.comms.resolver import resolve_contact  # noqa: E402
