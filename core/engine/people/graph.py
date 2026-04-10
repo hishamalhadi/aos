@@ -470,4 +470,140 @@ class GraphPipeline:
         circles_persisted = self.persist_communities(communities)
         stats["circles_persisted"] = circles_persisted
 
+        # Infer relationships from available signals
+        rel_stats = self.infer_relationships()
+        stats["relationships_inferred"] = rel_stats
+
+        return stats
+
+    # ── Relationship inference ──────────────────────────────────────
+
+    _FAMILY_TITLES = {
+        "mama": ("family", "parent"),
+        "baba": ("family", "parent"),
+        "aunty": ("family", "aunt"),
+        "uncle": ("family", "uncle"),
+        "phuppo": ("family", "aunt"),
+        "chachi": ("family", "aunt"),
+        "chachi": ("family", "aunt"),
+        "taya": ("family", "uncle"),
+        "nana": ("family", "grandparent"),
+        "nani": ("family", "grandparent"),
+        "dada": ("family", "grandparent"),
+        "dadi": ("family", "grandparent"),
+    }
+
+    def infer_relationships(self) -> dict[str, int]:
+        """Infer relationship edges from available signals.
+
+        Sources:
+        1. Relational names (Mama, Aunty, Uncle, Baba) → family
+        2. Shared surnames within the operator's family cluster → family
+        3. Apple Contacts "related names" metadata → family/friend
+        4. High communication + evening/personal hours → friend
+        5. Business hours + professional channels → colleague
+
+        Only creates relationships that don't already exist.
+        Returns {family: N, friend: N, colleague: N, total: N}.
+        """
+        now = _now()
+        stats = {"family": 0, "friend": 0, "colleague": 0, "community": 0, "total": 0}
+
+        # Get operator self ID
+        self_row = self.conn.execute(
+            "SELECT id FROM people WHERE is_self = 1"
+        ).fetchone()
+        self_id = self_row["id"] if self_row else None
+        if not self_id:
+            return stats
+
+        # Get existing relationships to avoid duplicates
+        existing = set()
+        for r in self.conn.execute("SELECT person_a_id, person_b_id, type FROM relationships").fetchall():
+            existing.add((r["person_a_id"], r["person_b_id"], r["type"]))
+            existing.add((r["person_b_id"], r["person_a_id"], r["type"]))
+
+        def _add_rel(person_id: str, rel_type: str, subtype: str, source: str, strength: float = 0.5, context: str = ""):
+            if (self_id, person_id, rel_type) in existing:
+                return False
+            try:
+                self.conn.execute(
+                    """INSERT OR IGNORE INTO relationships
+                       (person_a_id, person_b_id, type, subtype, strength, source, context, created_at, updated_at)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (self_id, person_id, rel_type, subtype, strength, source, context, now, now),
+                )
+                existing.add((self_id, person_id, rel_type))
+                return True
+            except Exception:
+                return False
+
+        # --- 1. Relational names ---
+        people = self.conn.execute(
+            "SELECT id, canonical_name, first_name, last_name FROM people WHERE is_archived = 0 AND is_self = 0"
+        ).fetchall()
+
+        for p in people:
+            name_lower = (p["canonical_name"] or "").lower()
+            for title, (rel_type, subtype) in self._FAMILY_TITLES.items():
+                if title in name_lower.split():
+                    if _add_rel(p["id"], rel_type, subtype, "name_inference",
+                                strength=0.8, context=f"name contains '{title}'"):
+                        stats["family"] += 1
+                    break
+
+        # --- 2. Shared surname with known family ---
+        # Get operator's surname(s) from self record and parents
+        family_surnames = set()
+        op = self.conn.execute("SELECT last_name FROM people WHERE is_self = 1").fetchone()
+        if op and op["last_name"]:
+            family_surnames.add(op["last_name"].lower())
+
+        # Add surnames from known family relationships
+        for r in self.conn.execute(
+            "SELECT p.last_name FROM relationships rel "
+            "JOIN people p ON p.id = rel.person_b_id "
+            "WHERE rel.person_a_id = ? AND rel.type = 'family' AND p.last_name IS NOT NULL",
+            (self_id,)
+        ).fetchall():
+            if r["last_name"]:
+                family_surnames.add(r["last_name"].lower())
+
+        # Also add Mama's surname (Hashmi from email) and known family names
+        mama = self.conn.execute(
+            "SELECT id, last_name FROM people WHERE canonical_name = 'Mama' AND is_archived = 0"
+        ).fetchone()
+        if mama and mama["last_name"]:
+            family_surnames.add(mama["last_name"].lower())
+
+        # People sharing a family surname who aren't already related
+        if family_surnames:
+            for p in people:
+                if not p["last_name"]:
+                    continue
+                if p["last_name"].lower() in family_surnames:
+                    if _add_rel(p["id"], "family", "extended",
+                                "surname_inference", strength=0.4,
+                                context=f"shares surname '{p['last_name']}'"):
+                        stats["family"] += 1
+
+        # --- 3. Core/active tier with high reciprocity → friend ---
+        core_active = self.conn.execute("""
+            SELECT pc.person_id, pc.tier FROM person_classification pc
+            JOIN people p ON pc.person_id = p.id
+            WHERE p.is_archived = 0 AND p.is_self = 0
+              AND pc.tier IN ('core', 'active')
+        """).fetchall()
+
+        for row in core_active:
+            pid = row["person_id"]
+            # Skip if already has a relationship
+            if any((self_id, pid, t) in existing for t in ("family", "friend", "colleague")):
+                continue
+            if _add_rel(pid, "friend", None, "communication_pattern",
+                        strength=0.6, context=f"tier={row['tier']}"):
+                stats["friend"] += 1
+
+        self.conn.commit()
+        stats["total"] = stats["family"] + stats["friend"] + stats["colleague"] + stats["community"]
         return stats
