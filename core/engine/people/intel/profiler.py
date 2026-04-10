@@ -204,7 +204,14 @@ def _pick_dominant_pattern(patterns: list[str]) -> str:
 
 
 def _collect_signal_dates(signals: PersonSignals) -> tuple[list[str], list[str]]:
-    """Return (firsts, lasts) — all per-signal first/last ISO date strings."""
+    """Return (firsts, lasts) — communication and voice dates only.
+
+    Photos and professional signals contribute to density but NOT to
+    recency (days_since_last). A photo from Apple Photos ML face detection
+    does not mean you recently communicated with someone. Including photos
+    inflated recency for 9 people who were photographed recently but
+    hadn't messaged in years.
+    """
     firsts: list[str] = []
     lasts: list[str] = []
     for c in signals.communication:
@@ -217,16 +224,14 @@ def _collect_signal_dates(signals: PersonSignals) -> tuple[list[str], list[str]]
             firsts.append(v.first_call_date)
         if v.last_call_date:
             lasts.append(v.last_call_date)
-    for p in signals.physical_presence:
-        if p.first_photo_date:
-            firsts.append(p.first_photo_date)
-        if p.last_photo_date:
-            lasts.append(p.last_photo_date)
+    # Professional signals (email) count as communication
     for pro in signals.professional:
         if pro.first_date:
             firsts.append(pro.first_date)
         if pro.last_date:
             lasts.append(pro.last_date)
+    # Photos and mentions do NOT drive recency — they're presence signals,
+    # not communication signals.
     return firsts, lasts
 
 
