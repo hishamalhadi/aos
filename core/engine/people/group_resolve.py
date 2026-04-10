@@ -60,13 +60,21 @@ def _jid_to_phone(wa_jid: str | None) -> str | None:
     """Extract phone number from a WhatsApp JID.
 
     '971501234567@s.whatsapp.net' -> '+971501234567'
+    LID format ('12345@lid') -> None (no phone in LID)
     """
     if not wa_jid:
         return None
+    if wa_jid.endswith("@lid"):
+        return None  # LIDs are opaque device IDs, not phone numbers
     m = _WA_JID_DIGITS_RE.match(wa_jid)
     if m:
         return "+" + m.group(1)
     return None
+
+
+def _is_lid(wa_jid: str | None) -> bool:
+    """Check if a JID is a Linked Device ID (not resolvable to phone)."""
+    return bool(wa_jid and wa_jid.endswith("@lid"))
 
 
 def _is_good_pushname(name: str | None) -> bool:
@@ -272,3 +280,83 @@ class GroupResolver:
             "created": created,
             "unresolved": still_unresolved,
         }
+
+    def resolve_from_bridge(self, bridge_url: str = "http://localhost:7601") -> dict[str, int]:
+        """Resolve LID group members using the WhatsApp bridge.
+
+        Queries the bridge for group member details (which include real JIDs),
+        caches the LID→JID mapping, then runs standard resolution on the
+        newly-discovered JIDs.
+
+        Requires the whatsmeow bridge to be running. Fails gracefully if not.
+        """
+        import json
+        import urllib.request
+
+        stats = {"groups_queried": 0, "lid_mappings_cached": 0, "resolved": 0}
+
+        # Ensure lid_cache table exists
+        self.conn.execute("""
+            CREATE TABLE IF NOT EXISTS wa_lid_cache (
+                lid TEXT PRIMARY KEY,
+                jid TEXT NOT NULL,
+                cached_at INTEGER NOT NULL
+            )
+        """)
+
+        try:
+            resp = urllib.request.urlopen(f"{bridge_url}/groups", timeout=5)
+            groups = json.loads(resp.read())
+        except Exception:
+            return {"error": "bridge_unavailable", **stats}
+
+        now = _now()
+        for group in groups:
+            group_jid = group.get("jid", "")
+            participants = group.get("participants", [])
+            stats["groups_queried"] += 1
+
+            for p in participants:
+                lid = p.get("lid")
+                jid = p.get("jid")
+                if lid and jid and jid.endswith("@s.whatsapp.net"):
+                    self.conn.execute(
+                        "INSERT OR REPLACE INTO wa_lid_cache (lid, jid, cached_at) VALUES (?, ?, ?)",
+                        (lid, jid, now),
+                    )
+                    stats["lid_mappings_cached"] += 1
+
+        self.conn.commit()
+
+        # Now resolve LID group members using the cache
+        unresolved_lids = self.conn.execute(
+            "SELECT gm.rowid, gm.wa_jid FROM group_members gm "
+            "WHERE gm.person_id IS NULL AND gm.wa_jid LIKE '%@lid'"
+        ).fetchall()
+
+        for member in unresolved_lids:
+            lid = member["wa_jid"]
+            # Look up in cache
+            cached = self.conn.execute(
+                "SELECT jid FROM wa_lid_cache WHERE lid = ?", (lid,)
+            ).fetchone()
+            if not cached:
+                continue
+
+            real_jid = cached["jid"]
+            # Try to find person by this JID
+            person_id = self._find_by_wa_jid(real_jid)
+            if not person_id:
+                phone = _jid_to_phone(real_jid)
+                if phone:
+                    person_id = self._find_by_phone(phone)
+
+            if person_id:
+                self.conn.execute(
+                    "UPDATE group_members SET person_id = ? WHERE rowid = ?",
+                    (person_id, member["rowid"]),
+                )
+                stats["resolved"] += 1
+
+        self.conn.commit()
+        return stats
