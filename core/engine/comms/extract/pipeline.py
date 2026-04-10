@@ -345,8 +345,14 @@ def compute_relationship_state(conn):
             SUM(CASE WHEN occurred_at >= ? THEN 1 ELSE 0 END) as count_30d,
             SUM(CASE WHEN occurred_at >= ? THEN 1 ELSE 0 END) as count_90d,
             SUM(CASE WHEN occurred_at >= ? THEN msg_count ELSE 0 END) as msgs_30d,
-            SUM(CASE WHEN direction IN ('outbound', 'both') AND occurred_at >= ? THEN msg_count ELSE 0 END) as out_30d,
-            SUM(CASE WHEN direction IN ('inbound', 'both') AND occurred_at >= ? THEN msg_count ELSE 0 END) as in_30d
+            SUM(CASE
+                WHEN direction = 'outbound' AND occurred_at >= ? THEN msg_count
+                WHEN direction = 'both' AND occurred_at >= ? THEN msg_count / 2
+                ELSE 0 END) as out_30d,
+            SUM(CASE
+                WHEN direction = 'inbound' AND occurred_at >= ? THEN msg_count
+                WHEN direction = 'both' AND occurred_at >= ? THEN msg_count / 2
+                ELSE 0 END) as in_30d
         FROM interactions
         GROUP BY person_id
     """, (
@@ -354,8 +360,10 @@ def compute_relationship_state(conn):
         ts - 30 * 86400,
         ts - 90 * 86400,
         ts - 30 * 86400,
-        ts - 30 * 86400,
-        ts - 30 * 86400,
+        ts - 30 * 86400,  # outbound exact
+        ts - 30 * 86400,  # outbound both (half)
+        ts - 30 * 86400,  # inbound exact
+        ts - 30 * 86400,  # inbound both (half)
     )).fetchall()
 
     updated = 0
