@@ -476,6 +476,33 @@ def _tier0_alias(
                 "SELECT * FROM people WHERE id = ?", (row["person_id"],)
             ).fetchone())
             if person:
+                # Check: is this a bare first name that matches multiple people?
+                # If someone with the same first name has higher importance,
+                # prefer them. "faisal" → Faisal Dader (imp=1) over Faisal Akhuzada (imp=3).
+                alias_importance = person.get("importance", 3)
+                if alias_importance > 1 and " " not in variant:
+                    # It's a single-word alias (likely a first name).
+                    # Check if a higher-importance person has this as their first name.
+                    better = conn.execute(
+                        "SELECT * FROM people WHERE first_name = ? COLLATE NOCASE "
+                        "AND is_archived = 0 AND importance < ? "
+                        "ORDER BY importance ASC LIMIT 1",
+                        (variant, alias_importance),
+                    ).fetchone()
+                    if better:
+                        better = _row_to_dict(better)
+                        contact = _build_contact(conn, better)
+                        return _make_result(
+                            person_id=better["id"],
+                            contact=contact,
+                            candidates=[_build_contact(conn, person), contact],
+                            confidence=0.85,
+                            tier=0,
+                            tier_name="alias_importance_override",
+                            channel=_resolve_channel(contact),
+                            resolved=True,
+                        )
+
                 contact = _build_contact(conn, person)
                 return _make_result(
                     person_id=person["id"],
