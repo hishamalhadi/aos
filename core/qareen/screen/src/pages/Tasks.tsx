@@ -10,11 +10,12 @@
  * No glass panels (invisible in dark theme). Solid bg-panel for elevated surfaces.
  */
 
-import { useState, useMemo, useEffect, useCallback } from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { Plus, X, ChevronDown, ChevronRight, Search, User, Calendar, GripVertical, ArrowUpDown, SlidersHorizontal, Settings2 } from 'lucide-react';
 import { DndContext, DragOverlay, useDraggable, useDroppable, closestCenter, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { useWork, type Task } from '@/hooks/useWork';
 import { useCreateTask, useUpdateTask } from '@/hooks/useTasks';
+import { useTaskKeyboard } from '@/hooks/useTaskKeyboard';
 import { Tag } from '@/components/primitives/Tag';
 import { DatabaseView } from '@/components/tasks/DatabaseView';
 import { TaskStatus, TaskPriority } from '@/lib/types';
@@ -41,16 +42,16 @@ function formatDue(iso: string): { text: string; overdue: boolean } {
 // TaskRow — single task line. Checkbox + priority + serif title + metadata
 // ═══════════════════════════════════════════════════════════════════════════
 
-function TaskRow({ task, onSelect, isSelected }: { task: Task; onSelect: () => void; isSelected?: boolean }) {
+function TaskRow({ task, onSelect, isSelected, isFocused }: { task: Task; onSelect: () => void; isSelected?: boolean; isFocused?: boolean }) {
   const update = useUpdateTask();
   const done = task.status === 'done';
   const due = task.due ? formatDue(task.due) : null;
 
   return (
-    <div
+    <div data-task-id={task.id}
       onClick={onSelect}
       className={`flex items-center gap-3 h-11 px-3 rounded-lg cursor-pointer transition-colors duration-75 group ${
-        isSelected ? 'bg-bg-tertiary' : 'hover:bg-bg-secondary'
+        isSelected ? 'bg-bg-tertiary' : isFocused ? 'bg-bg-secondary ring-1 ring-accent/20' : 'hover:bg-bg-secondary'
       }`}
     >
       {/* Checkbox */}
@@ -85,8 +86,8 @@ function TaskRow({ task, onSelect, isSelected }: { task: Task; onSelect: () => v
 // StatusGroup — collapsible section
 // ═══════════════════════════════════════════════════════════════════════════
 
-function StatusGroup({ status, tasks, onSelect, selectedId, defaultOpen = true }: {
-  status: string; tasks: Task[]; onSelect: (t: Task) => void; selectedId?: string; defaultOpen?: boolean;
+function StatusGroup({ status, tasks, onSelect, selectedId, focusedId, defaultOpen = true }: {
+  status: string; tasks: Task[]; onSelect: (t: Task) => void; selectedId?: string; focusedId?: string; defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   if (tasks.length === 0) return null;
@@ -104,7 +105,7 @@ function StatusGroup({ status, tasks, onSelect, selectedId, defaultOpen = true }
       </button>
       {open && (
         <div className="pl-3 ml-3 border-l border-border">
-          {display.map(t => <TaskRow key={t.id} task={t} onSelect={() => onSelect(t)} isSelected={selectedId === t.id} />)}
+          {display.map(t => <TaskRow key={t.id} task={t} onSelect={() => onSelect(t)} isSelected={selectedId === t.id} isFocused={focusedId === t.id} />)}
           {more > 0 && <p className="text-[11px] text-text-quaternary pl-3 py-2 opacity-50">+{more} completed</p>}
         </div>
       )}
@@ -116,15 +117,15 @@ function StatusGroup({ status, tasks, onSelect, selectedId, defaultOpen = true }
 // Board — DnD-enabled kanban
 // ═══════════════════════════════════════════════════════════════════════════
 
-function DraggableCard({ task, onSelect }: { task: Task; onSelect: () => void }) {
+function DraggableCard({ task, onSelect, isFocused }: { task: Task; onSelect: () => void; isFocused?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } = useDraggable({ id: task.id });
   const due = task.due ? formatDue(task.due) : null;
   const done = task.status === 'done';
 
   return (
-    <div ref={setNodeRef}
+    <div ref={setNodeRef} data-task-id={task.id}
       style={{ transform: transform ? `translate(${transform.x}px, ${transform.y}px)` : undefined, opacity: isDragging ? 0.3 : 1 }}
-      className="relative">
+      className={`relative ${isFocused ? 'ring-1 ring-accent/30 rounded-lg' : ''}`}>
       <button onClick={onSelect}
         className="w-full text-left rounded-lg p-3 bg-bg-secondary hover:bg-bg-tertiary border border-border-secondary hover:border-border-tertiary cursor-pointer transition-all duration-75 group">
         <div className="flex items-start gap-2">
@@ -147,7 +148,7 @@ function DraggableCard({ task, onSelect }: { task: Task; onSelect: () => void })
   );
 }
 
-function DroppableColumn({ status, tasks, onSelect }: { status: string; tasks: Task[]; onSelect: (t: Task) => void }) {
+function DroppableColumn({ status, tasks, onSelect, focusedId }: { status: string; tasks: Task[]; onSelect: (t: Task) => void; focusedId?: string }) {
   const { isOver, setNodeRef } = useDroppable({ id: `column-${status}` });
   const display = status === 'done' ? tasks.slice(-8).reverse() : tasks;
   const more = status === 'done' && tasks.length > 8 ? tasks.length - 8 : 0;
@@ -161,7 +162,7 @@ function DroppableColumn({ status, tasks, onSelect }: { status: string; tasks: T
         <span className="text-[10px] font-mono text-text-quaternary">{tasks.length}</span>
       </div>
       <div className="flex-1 overflow-y-auto space-y-1.5 px-1">
-        {display.map(t => <DraggableCard key={t.id} task={t} onSelect={() => onSelect(t)} />)}
+        {display.map(t => <DraggableCard key={t.id} task={t} onSelect={() => onSelect(t)} isFocused={focusedId === t.id} />)}
         {more > 0 && <p className="text-[10px] text-text-quaternary text-center py-2 opacity-40">+{more} more</p>}
         {display.length === 0 && <p className="text-[12px] text-text-quaternary text-center py-10 opacity-30">Empty</p>}
       </div>
@@ -169,8 +170,8 @@ function DroppableColumn({ status, tasks, onSelect }: { status: string; tasks: T
   );
 }
 
-function BoardView({ tasks, onSelect, onStatusChange }: {
-  tasks: Task[]; onSelect: (t: Task) => void; onStatusChange: (taskId: string, newStatus: string) => void;
+function BoardView({ tasks, onSelect, onStatusChange, focusedId }: {
+  tasks: Task[]; onSelect: (t: Task) => void; onStatusChange: (taskId: string, newStatus: string) => void; focusedId?: string;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const activeTask = activeId ? tasks.find(t => t.id === activeId) : null;
@@ -194,10 +195,10 @@ function BoardView({ tasks, onSelect, onStatusChange }: {
   return (
     <DndContext onDragStart={handleDragStart} onDragEnd={handleDragEnd} collisionDetection={closestCenter}>
       <div className="flex gap-3 h-full p-2">
-        <DroppableColumn status="todo" tasks={byStatus('todo')} onSelect={onSelect} />
-        <DroppableColumn status="active" tasks={byStatus('active')} onSelect={onSelect} />
-        <DroppableColumn status="waiting" tasks={byStatus('waiting')} onSelect={onSelect} />
-        <DroppableColumn status="done" tasks={byStatus('done')} onSelect={onSelect} />
+        <DroppableColumn status="todo" tasks={byStatus('todo')} onSelect={onSelect} focusedId={focusedId} />
+        <DroppableColumn status="active" tasks={byStatus('active')} onSelect={onSelect} focusedId={focusedId} />
+        <DroppableColumn status="waiting" tasks={byStatus('waiting')} onSelect={onSelect} focusedId={focusedId} />
+        <DroppableColumn status="done" tasks={byStatus('done')} onSelect={onSelect} focusedId={focusedId} />
       </div>
       <DragOverlay>
         {activeTask && (
@@ -699,9 +700,11 @@ export default function TasksPage({ initialProjectFilter }: { initialProjectFilt
   const updateTask = useUpdateTask();
   const [view, setView] = useState<View>('stream');
   const [selected, setSelected] = useState<Task | null>(null);
+  const [focusedId, setFocusedId] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [search, setSearch] = useState('');
   const [showSearch, setShowSearch] = useState(false);
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const [filterProject, setFilterProject] = useState(initialProjectFilter ?? '');
   const [filterStatus, setFilterStatus] = useState<Set<string>>(new Set());
   const [filterPriority, setFilterPriority] = useState<Set<number>>(new Set());
@@ -757,18 +760,19 @@ export default function TasksPage({ initialProjectFilter }: { initialProjectFilt
     }
   }, [tasks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const t = e.target as HTMLElement;
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
-      if (e.key === 'Escape' && selected) { setSelected(null); e.preventDefault(); e.stopPropagation(); return; }
-      if (e.key === 'Escape' && creating) { setCreating(false); e.preventDefault(); e.stopPropagation(); return; }
-      if (e.key === 'n' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); setCreating(true); }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [selected, creating]);
+  // Keyboard navigation
+  useTaskKeyboard({
+    tasks: filtered,
+    focusedId,
+    selectedId: selected?.id ?? null,
+    onFocus: setFocusedId,
+    onSelect: setSelected,
+    onToggleDone: (task) => updateTask.mutate({ id: task.id, data: { status: task.status === 'done' ? TaskStatus.TODO : TaskStatus.DONE } }),
+    onSetPriority: (task, p) => updateTask.mutate({ id: task.id, data: { priority: p as TaskPriority } }),
+    onSetStatus: (task, s) => updateTask.mutate({ id: task.id, data: { status: s as TaskStatus } }),
+    onStartCreate: () => setCreating(true),
+    onFocusSearch: () => { setShowSearch(true); setTimeout(() => searchInputRef.current?.focus(), 0); },
+  });
 
   const handleCreate = useCallback((title: string) => {
     createTask.mutate({ title, priority: 3 as TaskPriority });
@@ -972,7 +976,7 @@ export default function TasksPage({ initialProjectFilter }: { initialProjectFilt
         {showSearch && (
           <div className="flex items-center gap-2 px-4 h-8 border-b border-border">
             <Search className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Type to search..."
+            <input ref={searchInputRef} value={search} onChange={e => setSearch(e.target.value)} placeholder="Type to search..."
               autoFocus className="flex-1 bg-transparent text-[12px] text-text outline-none placeholder:text-text-quaternary" />
             {search && <button onClick={() => setSearch('')} className="cursor-pointer"><X className="w-3 h-3 text-text-quaternary" /></button>}
             <button onClick={() => { setShowSearch(false); setSearch(''); }} className="cursor-pointer"><X className="w-3.5 h-3.5 text-text-quaternary" /></button>
@@ -986,14 +990,14 @@ export default function TasksPage({ initialProjectFilter }: { initialProjectFilt
         <div className="flex-1 min-h-0 overflow-y-auto px-2">
           {view === 'stream' && (
             <>
-              <StatusGroup status="active" tasks={byStatus('active')} onSelect={setSelected} selectedId={selected?.id} />
-              <StatusGroup status="todo" tasks={byStatus('todo')} onSelect={setSelected} selectedId={selected?.id} />
-              <StatusGroup status="waiting" tasks={byStatus('waiting')} onSelect={setSelected} selectedId={selected?.id} />
-              <StatusGroup status="done" tasks={byStatus('done')} onSelect={setSelected} selectedId={selected?.id} defaultOpen={false} />
+              <StatusGroup status="active" tasks={byStatus('active')} onSelect={setSelected} selectedId={selected?.id} focusedId={focusedId ?? undefined} />
+              <StatusGroup status="todo" tasks={byStatus('todo')} onSelect={setSelected} selectedId={selected?.id} focusedId={focusedId ?? undefined} />
+              <StatusGroup status="waiting" tasks={byStatus('waiting')} onSelect={setSelected} selectedId={selected?.id} focusedId={focusedId ?? undefined} />
+              <StatusGroup status="done" tasks={byStatus('done')} onSelect={setSelected} selectedId={selected?.id} focusedId={focusedId ?? undefined} defaultOpen={false} />
             </>
           )}
           {view === 'board' && (
-            <BoardView tasks={filtered} onSelect={setSelected}
+            <BoardView tasks={filtered} onSelect={setSelected} focusedId={focusedId ?? undefined}
               onStatusChange={(taskId, newStatus) => updateTask.mutate({ id: taskId, data: { status: newStatus as TaskStatus } })} />
           )}
           {view === 'list' && <DatabaseView tasks={filtered} onSelect={setSelected} selectedId={selected?.id} projects={projects} groupBy={groupBy} visibleCols={visibleCols} />}
@@ -1011,6 +1015,18 @@ export default function TasksPage({ initialProjectFilter }: { initialProjectFilt
           )}
         </div>
       </div>
+
+      {/* ── Keyboard hint bar ── */}
+      {focusedId && !selected && (
+        <div className="shrink-0 flex items-center gap-4 px-4 h-7 border-t border-border text-[10px] text-text-quaternary">
+          <span><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">j</kbd><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px] ml-0.5">k</kbd> navigate</span>
+          <span><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">Enter</kbd> open</span>
+          <span><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">x</kbd> toggle done</span>
+          <span><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">1</kbd>-<kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">5</kbd> priority</span>
+          <span><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">/</kbd> search</span>
+          <span><kbd className="px-1 py-0.5 rounded bg-bg-tertiary font-mono text-[9px]">Esc</kbd> deselect</span>
+        </div>
+      )}
 
       {/* ── Detail panel — floating overlay, no backdrop blocking scroll ── */}
       {selected && (
