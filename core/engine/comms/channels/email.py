@@ -79,12 +79,25 @@ def _get_default_from_address() -> str:
     return (config.get("operator") or {}).get("primary_email", "")
 
 
-GWS_ACCOUNT = Path.home() / "aos" / "core" / "bin" / "internal" / "gws-account"
+_GWS_ACCOUNT_PATHS = [
+    Path.home() / "aos" / "core" / "bin" / "internal" / "gws-account",
+    Path.home() / "project" / "aos" / "core" / "bin" / "internal" / "gws-account",
+]
+
+
+def _find_gws_account() -> Path | None:
+    for p in _GWS_ACCOUNT_PATHS:
+        if p.exists():
+            return p
+    return None
+
+
+GWS_ACCOUNT = _find_gws_account()
 
 
 def _gws_available() -> bool:
-    """Check if gws CLI is installed and authenticated."""
-    return bool(shutil.which("gws")) and GWS_ACCOUNT.exists()
+    """Check if gws CLI is installed and gws-account wrapper exists."""
+    return bool(shutil.which("gws")) and GWS_ACCOUNT is not None
 
 
 def _send_via_gws(to: str, subject: str, body: str) -> tuple[bool, str]:
