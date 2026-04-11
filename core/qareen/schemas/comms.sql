@@ -57,3 +57,24 @@ CREATE INDEX IF NOT EXISTS idx_messages_intent      ON messages(intent);
 CREATE INDEX IF NOT EXISTS idx_conversations_person  ON conversations(person_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_status  ON conversations(status);
 CREATE INDEX IF NOT EXISTS idx_conversations_channel ON conversations(channel);
+
+-- Full-text search over message content (sub-millisecond keyword search)
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    content,
+    content=messages,
+    content_rowid=rowid
+);
+
+-- Auto-sync triggers
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+END;
+
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+    INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+END;

@@ -24,20 +24,25 @@ from ..models import Message
 
 log = logging.getLogger(__name__)
 
-# People Intelligence DB module
-_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
+# People Intelligence DB module — try runtime first, fall back to dev workspace
+_PEOPLE_PATHS = [
+    Path.home() / "aos" / "core" / "engine" / "people",
+    Path.home() / "project" / "aos" / "core" / "engine" / "people",
+]
 
 
 def _get_people_db():
     """Lazy import of the People Intelligence DB module."""
-    if str(_PEOPLE_SERVICE) not in sys.path:
-        sys.path.insert(0, str(_PEOPLE_SERVICE))
-    try:
-        import db as people_db
-        return people_db
-    except ImportError:
-        log.warning("People Intelligence DB not available at %s", _PEOPLE_SERVICE)
-        return None
+    for path in _PEOPLE_PATHS:
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+        try:
+            import db as people_db
+            return people_db
+        except ImportError:
+            continue
+    log.warning("People Intelligence DB not available at any known path")
+    return None
 
 
 def _get_resolver():

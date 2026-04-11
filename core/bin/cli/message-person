@@ -73,6 +73,7 @@ VERB_HINTS = {
 CHANNEL_PRIORITY = ["whatsapp", "imessage", "telegram", "slack", "email"]
 
 DRAFTS_PATH = Path.home() / ".aos" / "data" / "comms-drafts.jsonl"
+COMMS_DB = Path.home() / ".aos" / "data" / "comms.db"
 
 
 # ── Adapter loading (lazy, per-channel) ──────────────────────────────
@@ -159,7 +160,19 @@ def _pick_channel(contact: dict, hint: str | None = None) -> tuple[str, str]:
     else:
         hint_note = None
 
-    # 2. Contact's preferred channel
+    # 2. Active conversation channel (reply where they last wrote)
+    person_id = contact.get("person_id")
+    if person_id:
+        active = _active_channel_for(person_id)
+        if active and active in ALL_CHANNELS:
+            recip = _recipient_for(contact, active)
+            if recip:
+                why = f"active conversation on {active}"
+                if hint_note:
+                    why = f"{hint_note}; fallback to {why}"
+                return active, why
+
+    # 3. Contact's preferred channel
     preferred = contact.get("preferred_channel", "")
     if preferred and preferred in ALL_CHANNELS:
         recip = _recipient_for(contact, preferred)
@@ -169,7 +182,7 @@ def _pick_channel(contact: dict, hint: str | None = None) -> tuple[str, str]:
                 why = f"{hint_note}; fallback to {why}"
             return preferred, why
 
-    # 3. Data-driven: pick the channel with the most communication history.
+    # 4. Data-driven: pick the channel with the most communication history.
     #    If you exchange 25,000 iMessages with someone, pick iMessage, not WhatsApp.
     person_id = contact.get("person_id")
     if person_id:
@@ -182,7 +195,7 @@ def _pick_channel(contact: dict, hint: str | None = None) -> tuple[str, str]:
                     why = f"{hint_note}; fallback to {why}"
                 return best_ch, why
 
-    # 4. Fallback: priority-order availability
+    # 5. Fallback: priority-order availability
     for ch in CHANNEL_PRIORITY:
         recip = _recipient_for(contact, ch)
         if recip:
@@ -257,6 +270,100 @@ def _log_draft(entry: dict) -> str:
     with open(DRAFTS_PATH, "a") as f:
         f.write(json.dumps(entry, default=str) + "\n")
     return draft_id
+
+
+# ── comms.db integration ────────────────────────────────────────────
+
+def _get_comms_conn():
+    """Open a connection to comms.db. Returns None if unavailable."""
+    import sqlite3
+    if not COMMS_DB.exists():
+        return None
+    return sqlite3.connect(str(COMMS_DB))
+
+
+def _pull_context(person_id: str, limit: int = 10) -> list[dict]:
+    """Pull recent messages with a person from comms.db.
+
+    Returns a list of dicts: {timestamp, channel, direction, content}.
+    Used to give the skill conversation context before composing/sending.
+    """
+    conn = _get_comms_conn()
+    if not conn:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT timestamp, channel, direction, content "
+            "FROM messages WHERE person_id = ? "
+            "ORDER BY timestamp DESC LIMIT ?",
+            (person_id, limit),
+        ).fetchall()
+        conn.close()
+        return [
+            {"timestamp": r[0], "channel": r[1], "direction": r[2], "content": r[3]}
+            for r in reversed(rows)  # chronological order
+        ]
+    except Exception:
+        return []
+
+
+def _active_channel_for(person_id: str) -> str | None:
+    """Find the channel of the most recent conversation with a person.
+
+    If they messaged you on WhatsApp 2 hours ago, reply on WhatsApp —
+    not on whatever channel has the most lifetime messages.
+    """
+    conn = _get_comms_conn()
+    if not conn:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT channel FROM messages WHERE person_id = ? "
+            "ORDER BY timestamp DESC LIMIT 1",
+            (person_id,),
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _write_outbound(channel: str, recipient: str, person_id: str | None,
+                    text: str, conversation_id: str | None = None):
+    """Write an outbound message to comms.db after successful send."""
+    conn = _get_comms_conn()
+    if not conn:
+        return
+    try:
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        msg_id = f"out-{channel}-{int(time.time() * 1000)}"
+        conv_id = conversation_id or f"{channel}:{recipient}"
+
+        # Upsert conversation
+        existing = conn.execute(
+            "SELECT id FROM conversations WHERE id = ?", (conv_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE conversations SET last_message_at = ?, message_count = message_count + 1 "
+                "WHERE id = ?", (ts, conv_id)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO conversations (id, channel, person_id, last_message_at, message_count) "
+                "VALUES (?, ?, ?, ?, 1)", (conv_id, channel, person_id, ts)
+            )
+
+        conn.execute(
+            "INSERT OR IGNORE INTO messages "
+            "(id, channel, direction, sender_id, content, timestamp, person_id, conversation_id) "
+            "VALUES (?, ?, 'outbound', 'me', ?, ?, ?, ?)",
+            (msg_id, channel, text, ts, person_id, conv_id),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 # ── Contact shaping ──────────────────────────────────────────────────
@@ -504,6 +611,12 @@ def main() -> int:
         }, args.json)
         return 2
 
+    # ── Pull conversation context ────────────────────────────────
+    context_msgs = []
+    person_id = contact.get("person_id")
+    if person_id:
+        context_msgs = _pull_context(person_id, limit=10)
+
     # ── Preview / draft ───────────────────────────────────────────
     preview = {
         "status": "preview",
@@ -516,6 +629,8 @@ def main() -> int:
         "confidence": confidence,
         "tier": tier,
     }
+    if context_msgs:
+        preview["context"] = context_msgs
 
     if not args.no_draft:
         draft_status = "preview" if args.dry_run else "drafted"
@@ -564,6 +679,14 @@ def main() -> int:
                 "error": error_msg,
             }, args.json)
         return 1
+
+    # Write outbound to comms.db (canonical record)
+    _write_outbound(
+        channel=chosen,
+        recipient=recipient,
+        person_id=contact.get("person_id"),
+        text=text,
+    )
 
     # Log the success
     sent_payload = {
