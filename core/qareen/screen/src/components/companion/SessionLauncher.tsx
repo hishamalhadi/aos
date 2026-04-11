@@ -471,6 +471,7 @@ interface SessionRecord {
   duration_seconds: number
   has_summary: boolean
   audio_path?: string
+  status?: 'active' | 'paused' | 'ended'
 }
 
 function formatDuration(seconds: number): string {
@@ -501,7 +502,7 @@ function RecentSessions() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/companion/meetings')
+    fetch('/companion/sessions?limit=5')
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(data => {
         if (!cancelled) {
@@ -547,7 +548,7 @@ function RecentSessions() {
           {sessions.map(s => (
             <button
               key={s.id}
-              onClick={() => navigate(`/sessions/${s.id}`)}
+              onClick={() => navigate(s.status === 'active' || s.status === 'paused' ? `/companion/session/${s.id}` : `/sessions/${s.id}`)}
               className="
                 w-full flex items-center gap-3 px-3 py-2
                 rounded-[8px] text-left cursor-pointer

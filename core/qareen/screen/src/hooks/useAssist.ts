@@ -8,6 +8,7 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { usePageActions, serializeActions } from './usePageActions'
 import { useActionExecutor, type AssistResponse, type ExecutionResult } from './useActionExecutor'
+import { useQareenContext } from '@/store/qareenContext'
 
 // Reuse the same page context logic from FloatingAgent
 function getPageContext(pathname: string, searchParams: URLSearchParams): { label: string; detail: string | null } | null {
@@ -51,6 +52,9 @@ export function useAssist() {
   const [searchParams] = useSearchParams()
   const actions = usePageActions()
   const { execute } = useActionExecutor()
+  const focus = useQareenContext(s => s.focus)
+  const activeTopics = useQareenContext(s => s.activeTopics)
+  const recentActions = useQareenContext(s => s.recentActions)
 
   const assist = useCallback(async (input: string): Promise<AssistResult | null> => {
     if (!input.trim()) return null
@@ -66,6 +70,11 @@ export function useAssist() {
         page: pageCtx?.label ?? 'unknown',
         page_detail: pageCtx?.detail ?? null,
         actions: specs,
+        context: {
+          focus,
+          active_topics: activeTopics.slice(0, 3),
+          recent_actions: recentActions.slice(-3).map(a => a.spoken),
+        },
       })
 
       const execution = await execute(response)

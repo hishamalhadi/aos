@@ -7,6 +7,7 @@
 import { BarChart3, Workflow } from 'lucide-react';
 import { FlowTab } from './tabs/FlowTab';
 import { TraceTab } from './tabs/TraceTab';
+import { WaterfallTab } from './tabs/WaterfallTab';
 import { OutputTab } from './tabs/OutputTab';
 import { ReadinessBar } from './ReadinessBar';
 import { TestRunButton } from './execution/TestRunButton';
@@ -89,7 +90,7 @@ export function ExecutionWorkspace() {
       <div className="flex-1 min-h-0">
         {activeTab === 'flow' && <FlowTab />}
         {activeTab === 'trace' && <TraceTab />}
-        {activeTab === 'waterfall' && <EmptyTab icon={BarChart3} message="Run a test to see timing" />}
+        {activeTab === 'waterfall' && <WaterfallTab />}
         {activeTab === 'output' && <OutputTab />}
       </div>
     </div>

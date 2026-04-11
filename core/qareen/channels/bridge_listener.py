@@ -119,11 +119,48 @@ async def _listen_bridge_sse(bus: EventBus) -> None:
 
 
 async def _handle_bridge_event(data: dict[str, Any], bus: EventBus) -> None:
-    """Process a single event from the bridge SSE stream."""
+    """Process a single event from the bridge SSE stream.
+
+    Three responsibilities:
+      1. Capture user_message events into comms.db + EventBus (legacy)
+      2. Rebroadcast ALL events as `chat.<type>` on the companion SSE stream
+         (Phase 1 — unified frontend SSE)
+      3. Persist conversational events (user_message, result) to the
+         current Conversation in ConversationStore (Phase 2 — unified
+         storage)
+    """
     event_type = data.get("type", "")
 
-    # Only capture user messages (inbound from Telegram/WhatsApp)
+    # ── Rebroadcast to companion SSE as chat.* ────────────────────────────
+    # Every bridge event is forwarded with a `chat.` prefix so the frontend
+    # can distinguish chat events from companion events on the same stream.
+    if event_type:
+        try:
+            from qareen.api.companion import _push_companion_event
+
+            await _push_companion_event(f"chat.{event_type}", data)
+        except Exception:
+            logger.debug("Failed to rebroadcast chat event", exc_info=True)
+
+    # ── Persist conversational turns to the current Conversation ─────────
+    # We store user messages + final assistant results (the complete turn).
+    # text_delta / tool_start / tool_result are transient and don't need
+    # persistence — the final `result` event carries the full assistant text.
+    if event_type in ("user_message", "result", "tool_start"):
+        try:
+            _persist_chat_event(data, event_type)
+        except Exception:
+            logger.debug("Failed to persist chat event", exc_info=True)
+
+    # ── Legacy: capture user_message for inbound Telegram pipeline ────────
     if event_type != "user_message":
+        return
+
+    # WhatsApp is handled by the canonical whatsapp_desktop watcher which
+    # reads ChatStorage.sqlite directly. Skip WA events forwarded by the
+    # whatsmeow bridge to avoid double-inserting the same message with
+    # different (UUID vs wa_<Z_PK>) IDs.
+    if data.get("source") == "whatsapp":
         return
 
     ts = data.get("ts", 0)
@@ -169,6 +206,61 @@ async def _handle_bridge_event(data: dict[str, Any], bus: EventBus) -> None:
                 ),
             },
         ))
+
+
+def _persist_chat_event(data: dict[str, Any], event_type: str) -> None:
+    """Persist a bridge chat event to the current Conversation.
+
+    Appends to the ConversationStore's "current" conversation, creating
+    one on demand if none exists. This is the Phase 2 bridge from
+    Bridge's ring buffer → durable per-conversation storage.
+    """
+    from qareen.api.conversations import get_store
+
+    store = get_store()
+    convo = store.get_or_create_current()
+
+    text = (data.get("text") or "").strip()
+    if not text and event_type != "tool_start":
+        return
+
+    ts = data.get("ts")
+    source = data.get("source", "centcom")
+
+    if event_type == "user_message":
+        store.append_message(
+            convo.id,
+            role="user",
+            text=text,
+            speaker="You",
+            source=source,
+            ts=ts,
+        )
+    elif event_type == "result":
+        if data.get("is_error"):
+            return
+        store.append_message(
+            convo.id,
+            role="assistant",
+            text=text,
+            speaker="Claude",
+            source=source,
+            ts=ts,
+            duration_ms=data.get("duration_ms"),
+            cost_usd=data.get("cost_usd"),
+        )
+    elif event_type == "tool_start":
+        name = data.get("name") or "tool"
+        preview = data.get("preview") or f"Using {name}..."
+        store.append_message(
+            convo.id,
+            role="tool",
+            text=preview,
+            source=source,
+            ts=ts,
+            tool_name=name,
+            tool_preview=preview,
+        )
 
 
 async def start_bridge_listener(bus: EventBus) -> asyncio.Task | None:

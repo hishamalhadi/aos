@@ -2,11 +2,19 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useChatStore } from '@/store/chat';
 
 // ---------------------------------------------------------------------------
-// Chat SSE hook — manages the single Chief stream connection.
-// Messages are routed to the active session in the chat store.
+// Chat SSE hook — listens to the unified Qareen SSE stream for chat.* events.
+//
+// Phase 1 of chat + companion merge:
+//   - All chat requests go through /api/chat/* (Qareen proxies to Bridge)
+//   - SSE events come from /companion/stream with `chat.<type>` event names
+//     (rebroadcast by qareen.channels.bridge_listener)
+//
+// The frontend only talks to one backend (Qareen on port 4096). The Bridge
+// (port 4098) is invisible to the browser.
 // ---------------------------------------------------------------------------
 
-const API_BASE = 'http://127.0.0.1:4098';
+const SSE_URL = '/companion/stream';
+const API_BASE = '/api/chat';
 
 export interface ChatEvent {
   ts: number;
@@ -66,6 +74,7 @@ export function useChatStream() {
     fetch(`${API_BASE}/history`)
       .then(r => r.json())
       .then((events: ChatEvent[]) => {
+        if (!Array.isArray(events)) return;
         const msgs: ChatMessage[] = [];
         let accText = '';
 
@@ -110,11 +119,11 @@ export function useChatStream() {
       .catch(() => {});
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // SSE connection with auto-reconnect
+  // SSE connection — subscribes to chat.* events on the companion stream
   const connect = useCallback(() => {
     if (esRef.current) esRef.current.close();
 
-    const es = new EventSource(`${API_BASE}/stream`);
+    const es = new EventSource(SSE_URL);
     esRef.current = es;
 
     es.onopen = () => {
@@ -125,9 +134,11 @@ export function useChatStream() {
       }
     };
 
-    es.onmessage = (ev) => {
+    // Typed handlers for each chat.* event kind. The server emits these
+    // via addEventListener-compatible named events (not onmessage).
+    const handleChatEvent = (rawEvent: MessageEvent) => {
       try {
-        const event: ChatEvent = JSON.parse(ev.data);
+        const event: ChatEvent = JSON.parse(rawEvent.data);
         const sid = activeIdRef.current;
 
         switch (event.type) {
@@ -191,6 +202,22 @@ export function useChatStream() {
         }
       } catch { /* ignore parse errors */ }
     };
+
+    // All chat.* events share the same handler — the inner `event.type`
+    // field distinguishes them.
+    const chatEventNames = [
+      'chat.user_message',
+      'chat.text_delta',
+      'chat.text_complete',
+      'chat.tool_start',
+      'chat.tool_result',
+      'chat.result',
+      'chat.session_init',
+      'chat.rate_limit',
+    ];
+    for (const name of chatEventNames) {
+      es.addEventListener(name, handleChatEvent);
+    }
 
     es.onerror = () => {
       setConnected(false);

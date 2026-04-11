@@ -10,7 +10,7 @@
 import { useEffect, useCallback } from 'react';
 import { ReactFlowProvider } from '@xyflow/react';
 import {
-  ArrowLeft, Save, Eye, Edit3, Loader2,
+  ArrowLeft, Save, Eye, Edit3, Loader2, RotateCcw,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 
@@ -28,6 +28,8 @@ interface FlowEditorProps {
   isLoading?: boolean;
   onSave?: (workflow: N8nWorkflow) => void;
   isSaving?: boolean;
+  onRestore?: () => void;
+  canRestore?: boolean;
 }
 
 export default function FlowEditor({
@@ -37,6 +39,8 @@ export default function FlowEditor({
   isLoading,
   onSave,
   isSaving,
+  onRestore,
+  canRestore,
 }: FlowEditorProps) {
   const navigate = useNavigate();
   const {
@@ -120,6 +124,17 @@ export default function FlowEditor({
           {mode === 'edit' ? <Edit3 className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
           {mode === 'edit' ? 'Editing' : 'Viewing'}
         </button>
+
+        {/* Restore button */}
+        {mode === 'edit' && canRestore && onRestore && (
+          <button
+            onClick={onRestore}
+            className="flex items-center gap-1.5 px-2.5 py-1 rounded-[5px] text-[11px] font-[510] text-text-quaternary hover:text-accent hover:bg-hover transition-colors cursor-pointer"
+          >
+            <RotateCcw className="w-3 h-3" />
+            Restore
+          </button>
+        )}
 
         {/* Save button */}
         {mode === 'edit' && onSave && (

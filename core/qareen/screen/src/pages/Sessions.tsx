@@ -11,7 +11,7 @@ import { format, isToday, isYesterday, subDays, isAfter } from 'date-fns'
 // Sessions — history of all companion sessions, grouped by date.
 //
 // Route: /sessions
-// Data: /companion/meetings (merged from both sessions tables)
+// Data: /companion/sessions
 // ---------------------------------------------------------------------------
 
 interface SessionRecord {
@@ -24,6 +24,9 @@ interface SessionRecord {
   audio_path: string
   summary_preview?: string
   participants?: string[]
+  status?: 'active' | 'paused' | 'ended'
+  session_type?: string
+  skill?: string
 }
 
 type FilterTab = 'all' | 'has_summary' | 'has_audio'
@@ -119,11 +122,18 @@ export default function Sessions() {
 
   useEffect(() => {
     let cancelled = false
-    fetch('/companion/meetings')
+    fetch('/companion/sessions?limit=100')
       .then(r => { if (!r.ok) throw new Error(); return r.json() })
       .then(data => {
         if (!cancelled) {
-          setSessions(Array.isArray(data) ? data : [])
+          // Filter out empty/noise sessions: no title + no summary + short duration
+          const clean = (Array.isArray(data) ? data : []).filter((s: SessionRecord) => {
+            const hasTitle = s.title && s.title.trim() && s.title !== 'Untitled Session'
+            const hasSummary = s.has_summary
+            const hasContent = (s.duration_seconds || 0) > 10
+            return hasTitle || hasSummary || hasContent
+          })
+          setSessions(clean)
         }
       })
       .catch(() => {})
@@ -150,7 +160,7 @@ export default function Sessions() {
   const handleDelete = useCallback(async (id: string, e: React.MouseEvent) => {
     e.stopPropagation()
     try {
-      const res = await fetch(`/companion/meetings/${id}`, { method: 'DELETE' })
+      const res = await fetch(`/companion/session/${id}`, { method: 'DELETE' })
       if (res.ok) setSessions(prev => prev.filter(s => s.id !== id))
     } catch { /* silent */ }
   }, [])
@@ -169,7 +179,7 @@ export default function Sessions() {
           style={{ transitionDuration: 'var(--duration-instant)' }}
         >
           <ArrowLeft className="w-3 h-3" />
-          Companion
+          Home
         </button>
 
         {/* Stats line */}
@@ -255,7 +265,13 @@ export default function Sessions() {
                     <SessionRow
                       key={s.id}
                       session={s}
-                      onView={() => navigate(`/sessions/${s.id}`)}
+                      onView={() => {
+                        if (s.status === 'active' || s.status === 'paused') {
+                          navigate(`/companion/session/${s.id}`)
+                        } else {
+                          navigate(`/sessions/${s.id}`)
+                        }
+                      }}
                       onDelete={e => handleDelete(s.id, e)}
                     />
                   ))}
@@ -288,8 +304,11 @@ function SessionRow({
   const preview = cleanSummaryPreview(session.summary_preview || '')
 
   return (
-    <button
+    <div
       onClick={onView}
+      role="button"
+      tabIndex={0}
+      onKeyDown={e => { if (e.key === 'Enter') onView() }}
       className="
         w-full flex items-center gap-3 px-3 py-2.5
         rounded-[7px] text-left cursor-pointer
@@ -309,9 +328,14 @@ function SessionRow({
           <span className="text-[12px] font-[510] text-text-secondary truncate group-hover:text-text transition-colors" style={{ transitionDuration: 'var(--duration-instant)' }}>
             {session.title || 'Untitled'}
           </span>
-          {session.has_summary && (
-            <span className="inline-flex items-center px-1.5 h-[16px] rounded-xs text-[9px] font-[510] bg-green-muted text-green shrink-0">
-              Summary
+          {(session.status === 'active' || session.status === 'paused') && (
+            <span className={`inline-flex items-center px-1.5 h-[16px] rounded-xs text-[9px] font-[510] shrink-0 ${session.status === 'active' ? 'bg-green-muted text-green' : 'bg-yellow-muted text-yellow'}`}>
+              {session.status === 'active' ? 'Active' : 'Paused'}
+            </span>
+          )}
+          {session.skill && (
+            <span className="inline-flex items-center px-1.5 h-[16px] rounded-xs text-[9px] font-[510] bg-[rgba(255,245,235,0.04)] text-text-quaternary shrink-0">
+              {session.skill}
             </span>
           )}
         </div>
@@ -322,16 +346,24 @@ function SessionRow({
         )}
       </div>
 
-      {/* Right: duration + time */}
-      <div className="flex items-center gap-3 shrink-0">
+      {/* Right: duration + time + actions */}
+      <div className="flex items-center gap-2 shrink-0">
         {session.duration_seconds > 0 && (
           <span className="text-[10px] font-[510] text-text-quaternary tabular-nums">
             {formatDuration(session.duration_seconds)}
           </span>
         )}
         {timeStr && (
-          <span className="text-[10px] text-text-quaternary tabular-nums min-w-[60px] text-right">
+          <span className="text-[10px] text-text-quaternary tabular-nums min-w-[52px] text-right">
             {timeStr}
+          </span>
+        )}
+        {session.status === 'paused' && (
+          <span
+            className="inline-flex items-center px-2 h-[20px] rounded-full text-[10px] font-[510] bg-accent/10 text-accent cursor-pointer hover:bg-accent/20 transition-colors"
+            style={{ transitionDuration: 'var(--duration-instant)' }}
+          >
+            Resume
           </span>
         )}
         <button
@@ -349,6 +381,6 @@ function SessionRow({
           <Trash2 className="w-3 h-3" />
         </button>
       </div>
-    </button>
+    </div>
   )
 }

@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Rss } from 'lucide-react';
-import { Tag, type TagColor } from '@/components/primitives/Tag';
-import { StatusDot } from '@/components/primitives/StatusDot';
 import { EmptyState } from '@/components/primitives/EmptyState';
 import { Skeleton } from '@/components/primitives/Skeleton';
 
@@ -37,9 +35,21 @@ function timeAgo(iso: string | undefined | null): string {
   return `${days}d ago`;
 }
 
-const platformColor: Record<string, TagColor> = {
-  twitter: 'blue', youtube: 'red', github: 'gray',
-  hackernews: 'orange', blog: 'purple', arxiv: 'green',
+/** Returns true if the summary looks like actual prose, not a URL dump */
+function isRealSummary(s: string | null): s is string {
+  if (!s) return false;
+  // If more than half the string is URLs, it's not a real summary
+  const urlChars = (s.match(/https?:\/\/\S+/g) || []).join('').length;
+  return urlChars < s.length * 0.5 && s.length > 20;
+}
+
+const platformColors: Record<string, string> = {
+  twitter: 'text-tag-blue',
+  youtube: 'text-tag-red',
+  github: 'text-tag-gray',
+  hackernews: 'text-tag-orange',
+  blog: 'text-tag-purple',
+  arxiv: 'text-tag-green',
 };
 
 const FILTERS = [
@@ -51,6 +61,67 @@ const FILTERS = [
   { label: 'Blogs', value: 'blog' },
   { label: 'arXiv', value: 'arxiv' },
 ];
+
+// ---------------------------------------------------------------------------
+// Feed row
+// ---------------------------------------------------------------------------
+
+function FeedRow({ item, onClick }: { item: FeedItem; onClick: () => void }) {
+  const isUnread = item.status === 'unread';
+  const isHighRelevance = item.relevance_score >= 0.4;
+  const showSummary = isHighRelevance && isRealSummary(item.summary);
+  const platformColor = platformColors[item.platform] || 'text-tag-gray';
+
+  return (
+    <button
+      onClick={onClick}
+      className={`
+        w-full text-left cursor-pointer group
+        border-b border-border last:border-b-0
+        transition-colors
+        hover:bg-hover
+        ${showSummary ? 'py-3 px-3' : 'py-2 px-3'}
+      `}
+      style={{ transitionDuration: 'var(--duration-instant)' }}
+    >
+      {/* Primary line: platform · title ... time */}
+      <div className="flex items-baseline gap-0 min-w-0">
+        {/* Platform — left anchor for scanning */}
+        <span className={`text-[11px] font-[510] shrink-0 mr-2 ${platformColor}`}>
+          {item.platform === 'hackernews' ? 'HN' : item.platform}
+        </span>
+
+        {/* Title — fills remaining space, truncates */}
+        <span
+          className={`
+            text-[13px] leading-snug truncate min-w-0
+            ${isUnread ? 'text-text font-[530]' : 'text-text-tertiary font-normal'}
+          `}
+          style={{ flex: '1 1 0%' }}
+        >
+          {item.title}
+        </span>
+
+        {/* Right: time — fixed width, always visible */}
+        <span className="text-[11px] text-text-tertiary font-mono tabular-nums shrink-0 ml-3">
+          {timeAgo(item.published_at)}
+        </span>
+      </div>
+
+      {/* Secondary line: tags + summary — only for high-relevance items with real prose */}
+      {showSummary && (
+        <p className="text-[12px] text-text-quaternary leading-relaxed mt-0.5 line-clamp-1">
+          {(item.relevance_tags || []).length > 0 && (
+            <span className="text-text-quaternary">
+              {(item.relevance_tags || []).slice(0, 2).join(' · ')}{' · '}
+            </span>
+          )}
+          {item.summary}
+        </p>
+      )}
+    </button>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -94,37 +165,25 @@ export default function IntelligenceFeed() {
       .catch(() => {});
   }, []);
 
+  const unreadCount = stats?.unread_count ?? 0;
+  const totalCount = stats?.total_items ?? items.length;
+
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-[720px] mx-auto px-6 pt-10 pb-16">
+      <div className="max-w-[720px] mx-auto px-6 pt-8 pb-16">
 
-        {/* Stats */}
-        {stats && (
-          <div className="flex items-center gap-3 mb-6 text-[11px] text-text-quaternary font-mono tabular-nums">
-            <span>{stats.total_items} items</span>
-            <span className="w-px h-3 bg-border" />
-            <span>{stats.unread_count} unread</span>
-            <span className="w-px h-3 bg-border" />
-            <span>{stats.active_sources} sources</span>
-          </div>
-        )}
-
-        {/* Filter pills */}
-        <div className="flex items-center gap-2 mb-6 flex-wrap">
-          {FILTERS.map(f => (
-            <button
-              key={f.value}
-              onClick={() => setPlatform(f.value)}
-              className={`h-7 px-3 rounded-full text-[11px] font-medium cursor-pointer transition-colors duration-75
-                ${platform === f.value
-                  ? 'bg-accent text-white'
-                  : 'text-text-quaternary hover:text-text-tertiary hover:bg-hover'}`}
-            >
-              {f.label}
-            </button>
-          ))}
+        {/* Header: stats sentence + search */}
+        <div className="flex items-center gap-3 mb-5">
+          {stats && (
+            <p className="text-[12px] text-text-tertiary">
+              <span className={unreadCount > 0 ? 'text-text font-[510]' : ''}>
+                {unreadCount} unread
+              </span>
+              {' '}of {totalCount} · {stats.active_sources} sources
+            </p>
+          )}
           <div className="flex-1" />
-          <div className="relative max-w-[200px] w-full">
+          <div className="relative w-[180px]">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3 h-3 text-text-quaternary pointer-events-none" />
             <input
               type="text"
@@ -136,17 +195,33 @@ export default function IntelligenceFeed() {
           </div>
         </div>
 
-        {/* Error */}
-        {error && <p className="text-red text-[12px] mb-4">{error}</p>}
+        {/* Filter pills */}
+        <div className="flex items-center gap-1.5 mb-4">
+          {FILTERS.map(f => (
+            <button
+              key={f.value}
+              onClick={() => setPlatform(f.value)}
+              className={`h-6 px-2.5 rounded-full text-[10px] font-[510] cursor-pointer transition-colors duration-75
+                ${platform === f.value
+                  ? 'bg-accent text-white'
+                  : 'text-text-quaternary hover:text-text-tertiary hover:bg-hover'}`}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
 
-        {/* Loading */}
+        {/* Error */}
+        {error && <p className="text-red text-[12px] mb-4">Couldn't load feed — {error}</p>}
+
+        {/* Loading skeleton — matches row shape */}
         {loading && (
-          <div className="space-y-2">
-            {[1,2,3,4,5].map(i => (
-              <div key={i} className="bg-bg-secondary border border-border rounded-lg p-4">
-                <Skeleton className="h-4 w-3/4 mb-2" />
-                <Skeleton className="h-3 w-full mb-1" />
-                <Skeleton className="h-3 w-2/3" />
+          <div className="border-t border-border">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="py-2.5 px-3 border-b border-border flex items-center gap-3">
+                <Skeleton className="h-3.5 flex-1" />
+                <Skeleton className="h-3 w-8" />
+                <Skeleton className="h-3 w-10" />
               </div>
             ))}
           </div>
@@ -156,56 +231,20 @@ export default function IntelligenceFeed() {
         {!loading && !error && items.length === 0 && (
           <EmptyState
             icon={<Rss />}
-            title="No intelligence items yet"
-            description="Items will appear here once sources are configured and ingested."
+            title="No items yet"
+            description="Configure sources in the Sources tab to start receiving intelligence."
           />
         )}
 
-        {/* Feed */}
+        {/* Feed — divider-separated rows, no cards */}
         {!loading && items.length > 0 && (
-          <div className="space-y-2">
+          <div className="border-t border-border">
             {items.map(item => (
-              <button
+              <FeedRow
                 key={item.id}
+                item={item}
                 onClick={() => navigate(`/intelligence/${item.id}`)}
-                className="w-full text-left px-4 py-3.5 bg-bg-secondary border border-border rounded-lg hover:border-border-secondary transition-colors duration-75 cursor-pointer group"
-              >
-                {/* Row 1: platform + author + time */}
-                <div className="flex items-center gap-2 mb-1.5">
-                  {item.status === 'unread' && <StatusDot color="blue" size="sm" />}
-                  <Tag label={item.platform} color={platformColor[item.platform] || 'gray'} size="sm" />
-                  {item.author && (
-                    <span className="text-[11px] font-medium text-text-tertiary truncate">{item.author}</span>
-                  )}
-                  <span className="text-[10px] text-text-quaternary font-mono ml-auto shrink-0">
-                    {timeAgo(item.published_at)}
-                  </span>
-                </div>
-
-                {/* Row 2: title */}
-                <p className="text-[13px] font-medium text-text-secondary group-hover:text-text transition-colors duration-75 leading-snug mb-1">
-                  {item.title}
-                </p>
-
-                {/* Row 3: summary */}
-                {item.summary && (
-                  <p className="text-[12px] text-text-quaternary line-clamp-2 leading-relaxed mb-2">
-                    {item.summary}
-                  </p>
-                )}
-
-                {/* Row 4: tags + score */}
-                <div className="flex items-center gap-1.5">
-                  {(item.relevance_tags || []).slice(0, 3).map(tag => (
-                    <span key={tag} className="h-[18px] px-1.5 rounded-xs text-[10px] bg-bg-tertiary text-text-tertiary inline-flex items-center">
-                      {tag}
-                    </span>
-                  ))}
-                  <span className="ml-auto text-[10px] font-mono text-text-quaternary">
-                    {item.relevance_score.toFixed(1)}
-                  </span>
-                </div>
-              </button>
+              />
             ))}
           </div>
         )}

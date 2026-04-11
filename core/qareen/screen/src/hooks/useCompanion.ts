@@ -25,7 +25,8 @@ const SSE_URL = '/companion/stream'
  *   session        — session state updates
  *   note_group     — structured note group
  */
-export function useCompanion() {
+export function useCompanion(options?: { enableRestore?: boolean }) {
+  const enableRestore = options?.enableRestore ?? false
   const addStreamItem = useCompanionStore((s) => s.addStreamItem)
   const addSegment = useCompanionStore((s) => s.addSegment)
   const updateSegment = useCompanionStore((s) => s.updateSegment)
@@ -855,10 +856,12 @@ export function useCompanion() {
   }, [setSessionId])
 
   // -------------------------------------------------------------------------
-  // Restore active session from backend on mount (survives page refresh)
+  // Restore active session from backend on mount (survives page refresh).
+  // Only enabled on session pages — prevents home page from pulling stale data.
   // -------------------------------------------------------------------------
   const sessionRestored = useRef(false)
   useEffect(() => {
+    if (!enableRestore) return
     if (sessionRestored.current) return
     sessionRestored.current = true
     let cancelled = false
