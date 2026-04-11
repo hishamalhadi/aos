@@ -1,5 +1,5 @@
-import { useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useCallback, useMemo } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { Command } from 'cmdk';
 import {
@@ -18,9 +18,14 @@ import {
   Plus,
   Sun,
   RefreshCw,
+  Columns3,
+  List,
+  LayoutGrid,
+  Filter,
   type LucideIcon,
 } from 'lucide-react';
 import { useUIStore } from '@/store/ui';
+import { useWork, type Task } from '@/hooks/useWork';
 
 interface NavEntry {
   label: string;
@@ -48,7 +53,25 @@ export default function CommandPalette() {
   const setOpen = useUIStore((s) => s.setCommandPaletteOpen);
   const toggleCommandPalette = useUIStore((s) => s.toggleCommandPalette);
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
+  const { data: workData } = useWork();
+
+  const isOnTasks = location.pathname === '/work' || location.pathname === '/tasks';
+
+  // All tasks flattened for search — include subtasks so everything is findable
+  const activeTasks = useMemo(() => {
+    if (!workData?.tasks) return [];
+    const flat: Task[] = [];
+    function flatten(list: Task[]) {
+      for (const t of list) {
+        if (t.status !== 'done' && t.status !== 'cancelled') flat.push(t);
+        if (t.subtasks) flatten(t.subtasks);
+      }
+    }
+    flatten(workData.tasks);
+    return flat;
+  }, [workData?.tasks]);
 
   // Global Cmd+K listener
   useEffect(() => {
@@ -160,7 +183,65 @@ export default function CommandPalette() {
             <RefreshCw className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
             <span className="text-xs font-[510]">Refresh Data</span>
           </Command.Item>
+
+          <Command.Item
+            value="Stream View"
+            keywords={['view', 'list', 'stream', 'grouped']}
+            onSelect={() => runAndClose(() => navigate('/work?tab=tasks&view=stream'))}
+            className="mx-2 h-8 flex items-center gap-3 px-3 rounded-[4px] cursor-pointer text-text-secondary data-[selected=true]:bg-bg-tertiary data-[selected=true]:text-text transition-colors"
+            style={{ transitionDuration: 'var(--duration-instant)' }}
+          >
+            <List className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
+            <span className="text-xs font-[510]">Stream View</span>
+          </Command.Item>
+
+          <Command.Item
+            value="Board View"
+            keywords={['kanban', 'columns', 'board']}
+            onSelect={() => runAndClose(() => navigate('/work?tab=tasks&view=board'))}
+            className="mx-2 h-8 flex items-center gap-3 px-3 rounded-[4px] cursor-pointer text-text-secondary data-[selected=true]:bg-bg-tertiary data-[selected=true]:text-text transition-colors"
+            style={{ transitionDuration: 'var(--duration-instant)' }}
+          >
+            <Columns3 className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
+            <span className="text-xs font-[510]">Board View</span>
+          </Command.Item>
+
+          <Command.Item
+            value="List View"
+            keywords={['table', 'database', 'spreadsheet']}
+            onSelect={() => runAndClose(() => navigate('/work?tab=tasks&view=list'))}
+            className="mx-2 h-8 flex items-center gap-3 px-3 rounded-[4px] cursor-pointer text-text-secondary data-[selected=true]:bg-bg-tertiary data-[selected=true]:text-text transition-colors"
+            style={{ transitionDuration: 'var(--duration-instant)' }}
+          >
+            <LayoutGrid className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
+            <span className="text-xs font-[510]">List View</span>
+          </Command.Item>
         </Command.Group>
+
+        {/* Tasks — searchable, all active */}
+        {activeTasks.length > 0 && (
+          <Command.Group
+            heading="Tasks"
+            className="[&_[cmdk-group-heading]]:px-4 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:mt-1 [&_[cmdk-group-heading]]:type-overline [&_[cmdk-group-heading]]:text-text-quaternary"
+          >
+            {activeTasks.map((task) => (
+              <Command.Item
+                key={task.id}
+                value={`${task.title} ${task.project ?? ''}`}
+                keywords={[task.id, task.project ?? '', task.status]}
+                onSelect={() => runAndClose(() => navigate(`/work?tab=tasks&open=${task.id}`))}
+                className="mx-2 h-8 flex items-center gap-3 px-3 rounded-[4px] cursor-pointer text-text-secondary data-[selected=true]:bg-bg-tertiary data-[selected=true]:text-text transition-colors"
+                style={{ transitionDuration: 'var(--duration-instant)' }}
+              >
+                <CheckSquare className="w-3.5 h-3.5 text-text-quaternary shrink-0" />
+                <span className="text-xs font-[510] truncate flex-1">{task.title}</span>
+                {task.project && (
+                  <span className="text-[10px] text-text-quaternary shrink-0">{task.project}</span>
+                )}
+              </Command.Item>
+            ))}
+          </Command.Group>
+        )}
       </Command.List>
     </Command.Dialog>
   );
