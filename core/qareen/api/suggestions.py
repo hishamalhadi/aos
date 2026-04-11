@@ -148,7 +148,7 @@ def _get_deployed_recipe_ids() -> set[str]:
 
 def _get_google_account_count() -> int:
     """Count Google accounts with tokens."""
-    creds_dir = Path.home() / ".google_workspace_mcp" / "credentials"
+    creds_dir = Path.home() / ".aos" / "config" / "google" / "credentials"
     if not creds_dir.is_dir():
         return 0
     return len(list(creds_dir.glob("*.json")))
