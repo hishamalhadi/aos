@@ -40,15 +40,33 @@ class TelegramAdapter(ChannelAdapter):
     # --- Lifecycle ---
 
     def is_available(self) -> bool:
-        """Check if the bridge is running and queue file exists."""
-        if not self.queue_path.exists():
-            return False
-        # Consider available if queue file was written to in last 24 hours
+        """Check if the channel can send or receive.
+
+        Available if EITHER: (a) queue file is fresh (receive works),
+        or (b) bot token exists in Keychain (send works via Bot API).
+        """
+        # Check receive path (queue freshness)
+        if self.queue_path.exists():
+            try:
+                mtime = self.queue_path.stat().st_mtime
+                if (time.time() - mtime) < 86400:
+                    return True
+            except OSError:
+                pass
+
+        # Check send path (bot token available)
         try:
-            mtime = self.queue_path.stat().st_mtime
-            return (time.time() - mtime) < 86400
-        except OSError:
-            return False
+            import subprocess
+            result = subprocess.run(
+                [str(Path.home() / "aos" / "core" / "bin" / "agent-secret"), "get", "TELEGRAM_BOT_TOKEN"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if result.stdout.strip():
+                return True
+        except Exception:
+            pass
+
+        return False
 
     def health(self) -> dict:
         """Return health status for the Telegram channel."""

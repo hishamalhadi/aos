@@ -37,9 +37,9 @@ _ADAPTER_MAP: dict[str, str] = {
     "messages": "channels.imessage",    # "messages" is the registry ID for iMessage
     "telegram": "channels.telegram",
     "whatsapp_local": "channels.whatsapp_local",
+    "slack": "channels.slack",
+    "email": "channels.email",
     # Future:
-    # "mail": "channels.email",
-    # "email": "channels.email",
     # "calendar": "channels.calendar",
 }
 
@@ -49,6 +49,8 @@ _ADAPTER_CLASSES: dict[str, str] = {
     "messages": "iMessageAdapter",
     "telegram": "TelegramAdapter",
     "whatsapp_local": "WhatsAppLocalAdapter",
+    "slack": "SlackAdapter",
+    "email": "EmailAdapter",
 }
 
 
