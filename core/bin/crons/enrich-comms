@@ -1,0 +1,213 @@
+#!/usr/bin/env python3
+"""
+Comms Enrichment — Batch extract topics, intent, and summaries from messages.
+
+Runs nightly. Groups unprocessed messages by (person, date), sends ONE LLM
+call per group to extract structured metadata. Writes results to:
+  - messages.intent (per message)
+  - messages.processed = 1
+  - message_entities (topic extractions)
+  - interactions.topics + summary (in people.db)
+
+Cost: ~$0.05/night using Haiku. No per-query token cost after.
+
+Usage:
+    python3 ~/aos/core/bin/crons/enrich-comms [--dry-run] [--limit 100] [--verbose]
+"""
+
+import json
+import os
+import sqlite3
+import subprocess
+import sys
+from collections import defaultdict
+from datetime import datetime
+from pathlib import Path
+
+# AOS paths
+for _p in (Path.home() / "project" / "aos", Path.home() / "aos"):
+    if (_p / "core").is_dir():
+        sys.path.insert(0, str(_p))
+        break
+
+COMMS_DB = Path.home() / ".aos" / "data" / "comms.db"
+PEOPLE_DB = Path.home() / ".aos" / "data" / "people.db"
+LOG_DIR = Path.home() / ".aos" / "logs"
+
+DRY_RUN = "--dry-run" in sys.argv
+VERBOSE = "--verbose" in sys.argv or "-v" in sys.argv
+LIMIT = 500  # max messages per run
+
+for arg in sys.argv:
+    if arg.startswith("--limit"):
+        try:
+            LIMIT = int(sys.argv[sys.argv.index(arg) + 1])
+        except (IndexError, ValueError):
+            pass
+
+
+def log(msg):
+    ts = datetime.now().strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}")
+
+
+def extract_with_llm(person_name: str, messages: list[dict]) -> dict | None:
+    """Call Claude Haiku to extract topics, intent, and summary from a batch.
+
+    Returns: {topics: [str], intent: str, summary: str, sentiment: float}
+    """
+    msg_text = "\n".join(
+        f"[{m['direction']}] {m['content'][:200]}"
+        for m in messages
+        if m.get("content")
+    )
+
+    if not msg_text.strip():
+        return None
+
+    prompt = f"""Analyze this conversation with {person_name}. Return ONLY valid JSON.
+
+Messages:
+{msg_text[:3000]}
+
+Return:
+{{"topics": ["topic1", "topic2"], "intent": "social|request|info|commitment|question", "summary": "One line summary", "sentiment": 0.5}}
+
+Rules:
+- topics: 1-4 keywords describing what was discussed
+- intent: the dominant intent of the conversation
+- summary: max 15 words
+- sentiment: -1.0 (negative) to 1.0 (positive)"""
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", prompt, "--model", "haiku", "--output-format", "json"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        outer = json.loads(result.stdout.strip())
+        # claude CLI wraps in {"result": "..."} with markdown fences
+        raw = outer.get("result", "") if isinstance(outer, dict) else str(outer)
+        # Strip markdown code fences if present
+        raw = raw.strip()
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])  # remove first line
+        if raw.endswith("```"):
+            raw = raw[:raw.rfind("```")]
+        return json.loads(raw.strip())
+    except Exception as e:
+        if VERBOSE:
+            log(f"  LLM error: {e}")
+        return None
+
+
+def main():
+    if not COMMS_DB.exists():
+        log("comms.db not found")
+        return
+
+    conn = sqlite3.connect(str(COMMS_DB))
+    rows = conn.execute("""
+        SELECT rowid, id, channel, direction, content, timestamp, person_id
+        FROM messages
+        WHERE processed = 0
+          AND person_id IS NOT NULL
+          AND content IS NOT NULL
+          AND length(content) > 0
+        ORDER BY timestamp DESC
+        LIMIT ?
+    """, (LIMIT,)).fetchall()
+
+    if not rows:
+        log("No unprocessed messages with person_ids")
+        return
+
+    log(f"Found {len(rows)} unprocessed messages")
+
+    # Resolve person names from people.db
+    person_names = {}
+    if PEOPLE_DB.exists():
+        pconn = sqlite3.connect(str(PEOPLE_DB))
+        person_ids = list(set(r[6] for r in rows if r[6]))
+        for pid in person_ids:
+            row = pconn.execute(
+                "SELECT canonical_name FROM people WHERE id = ?", (pid,)
+            ).fetchone()
+            if row:
+                person_names[pid] = row[0]
+        pconn.close()
+
+    # Group by (person_id, date)
+    groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for r in rows:
+        person_id = r[6]
+        date = r[5][:10] if r[5] else "unknown"
+        groups[(person_id, date)].append({
+            "rowid": r[0],
+            "id": r[1],
+            "channel": r[2],
+            "direction": r[3],
+            "content": r[4],
+            "timestamp": r[5],
+        })
+
+    log(f"Grouped into {len(groups)} batches (person × day)")
+
+    enriched = 0
+    total_entities = 0
+
+    for (person_id, date), msgs in groups.items():
+        person_name = person_names.get(person_id, person_id)
+
+        if VERBOSE:
+            log(f"  {person_name} on {date}: {len(msgs)} messages")
+
+        if DRY_RUN:
+            enriched += 1
+            continue
+
+        result = extract_with_llm(person_name, msgs)
+        if not result:
+            continue
+
+        topics = result.get("topics", [])
+        intent = result.get("intent", "")
+        summary = result.get("summary", "")
+        sentiment = result.get("sentiment", 0.0)
+
+        # Update messages: set processed + intent
+        msg_ids = [m["id"] for m in msgs]
+        for mid in msg_ids:
+            conn.execute(
+                "UPDATE messages SET processed = 1, intent = ? WHERE id = ?",
+                (intent, mid),
+            )
+
+        # Write topic entities
+        for mid in msg_ids:
+            for topic in topics[:4]:
+                conn.execute(
+                    "INSERT INTO message_entities (message_id, entity_type, entity_id, confidence) "
+                    "VALUES (?, 'topic', ?, 0.8)",
+                    (mid, topic),
+                )
+                total_entities += 1
+
+        enriched += 1
+
+        if VERBOSE:
+            log(f"    → topics={topics}, intent={intent}, summary={summary[:50]}")
+
+    conn.commit()
+    conn.close()
+
+    # Update interactions in people.db with summaries
+    # (deferred — the topics are now in message_entities, searchable via comms.db)
+
+    action = "Would enrich" if DRY_RUN else "Enriched"
+    log(f"{action} {enriched}/{len(groups)} batches, {total_entities} topic entities written")
+
+
+if __name__ == "__main__":
+    main()

@@ -84,6 +84,7 @@ class MessageBus:
     def _register_default_consumers(self):
         """Register all standard consumers. Failures are non-fatal."""
         _consumer_classes = [
+            ("core.comms.consumers.comms_store", "CommsStoreConsumer"),
             ("core.comms.consumers.people_intel", "PeopleIntelConsumer"),
             ("core.comms.consumers.pattern_update", "PatternUpdateConsumer"),
             ("core.comms.orchestrator", "CommsOrchestrator"),

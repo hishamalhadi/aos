@@ -25,13 +25,21 @@ from .models import Message
 
 log = logging.getLogger(__name__)
 
-_PEOPLE_SERVICE = Path.home() / "aos" / "core" / "engine" / "people"
+_PEOPLE_PATHS = [
+    Path.home() / "aos" / "core" / "engine" / "people",
+    Path.home() / "project" / "aos" / "core" / "engine" / "people",
+]
 TRUST_PATH = Path.home() / ".aos" / "config" / "trust.yaml"
 
 
+def _ensure_people_path():
+    for path in _PEOPLE_PATHS:
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
+
+
 def _get_people_db():
-    if str(_PEOPLE_SERVICE) not in sys.path:
-        sys.path.insert(0, str(_PEOPLE_SERVICE))
+    _ensure_people_path()
     try:
         import db as people_db
         return people_db
@@ -40,8 +48,7 @@ def _get_people_db():
 
 
 def _get_resolver():
-    if str(_PEOPLE_SERVICE) not in sys.path:
-        sys.path.insert(0, str(_PEOPLE_SERVICE))
+    _ensure_people_path()
     try:
         import resolver
         return resolver
