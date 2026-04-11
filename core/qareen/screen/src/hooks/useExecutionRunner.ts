@@ -15,6 +15,7 @@ export interface NodeResult {
   items: number;
   error: string | null;
   simulated: boolean;
+  started_at: number;
 }
 
 export type RunState = 'idle' | 'building' | 'running' | 'completed' | 'error';
@@ -27,6 +28,7 @@ export function useExecutionRunner() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
   const abortRef = useRef<AbortController | null>(null);
+  const nodeStartTimes = useRef<Record<string, number>>({});
 
   const spec = useArchitectStore((s) => s.spec);
 
@@ -40,6 +42,7 @@ export function useExecutionRunner() {
     setOverallStatus(null);
     setErrorMessage(null);
     setProgress({ current: 0, total: 0 });
+    nodeStartTimes.current = {};
 
     // Abort previous run
     if (abortRef.current) abortRef.current.abort();
@@ -86,8 +89,10 @@ export function useExecutionRunner() {
                 setRunState('running');
                 setCurrentNode(data.node);
                 setProgress({ current: data.index, total: data.total });
+                nodeStartTimes.current[data.node] = Date.now();
               } else if (eventType === 'node_complete') {
-                setNodeResults(prev => [...prev, data as NodeResult]);
+                const started_at = nodeStartTimes.current[data.node] ?? Date.now() - (data.duration_ms ?? 0);
+                setNodeResults(prev => [...prev, { ...data, started_at } as NodeResult]);
                 setProgress(prev => ({ ...prev, current: prev.current + 1 }));
               } else if (eventType === 'done') {
                 setOverallStatus(data.status);

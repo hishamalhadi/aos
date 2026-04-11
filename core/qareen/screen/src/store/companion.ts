@@ -269,6 +269,10 @@ interface CompanionState {
   transcriptCollapsed: boolean
   setTranscriptCollapsed: (collapsed: boolean) => void
 
+  // Screen mode (v2)
+  screenMode: 'focus' | 'split'
+  setScreenMode: (mode: 'focus' | 'split') => void
+
   // Thread state (v2)
   threads: Thread[]
   activeThreadId: string | null
@@ -491,6 +495,10 @@ export const useCompanionStore = create<CompanionState>()(
       transcriptCollapsed: false,
       setTranscriptCollapsed: (transcriptCollapsed) => set({ transcriptCollapsed }),
 
+      // Screen mode (v2)
+      screenMode: 'focus' as const,
+      setScreenMode: (mode) => set({ screenMode: mode }),
+
       // Thread state (v2)
       threads: [],
       activeThreadId: null,
@@ -556,6 +564,9 @@ export const useCompanionStore = create<CompanionState>()(
       // Clear all session data for a fresh start
       clearSessionData: () =>
         set({
+          session: null,
+          sessionId: null,
+          lastEventSequence: 0,
           segments: [],
           noteGroups: [],
           approvals: [],

@@ -132,7 +132,7 @@ async def _exec_trigger(node: dict, prev_outputs: dict) -> list:
 async def _exec_gmail(node: dict, prev_outputs: dict) -> list:
     """Execute Gmail node — real API call."""
     import httpx
-    token_dir = Path.home() / ".google_workspace_mcp" / "credentials"
+    token_dir = Path.home() / ".aos" / "config" / "google" / "credentials"
     token_files = sorted(token_dir.glob("*.json"))
     if not token_files:
         raise RuntimeError("No Google credentials found")
@@ -491,6 +491,28 @@ def _row_to_automation(row: sqlite3.Row) -> dict:
     return d
 
 
+@router.post("/create")
+async def create_automation(request: Request) -> JSONResponse:
+    """Create a new empty automation record and return its ID."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    aid = f"n8n_{uuid.uuid4().hex[:8]}"
+    try:
+        conn = _get_db()
+        conn.execute(
+            "INSERT INTO automations (id, name, status, created_at) VALUES (?, ?, ?, ?)",
+            (aid, body.get("name", "Untitled Automation"), "draft", datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+        return JSONResponse({"id": aid})
+    except Exception as e:
+        logger.exception("Failed to create automation")
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+
 @router.get("/n8n")
 async def list_n8n_automations(request: Request) -> JSONResponse:
     """List all n8n-powered automations from the database."""
@@ -589,7 +611,7 @@ async def automations_context(request: Request) -> JSONResponse:
 
     # Discover connected accounts from credential files
     connected_accounts: list[str] = []
-    google_creds_dir = Path.home() / ".google_workspace_mcp" / "credentials"
+    google_creds_dir = Path.home() / ".aos" / "config" / "google" / "credentials"
     if google_creds_dir.is_dir() and any(google_creds_dir.glob("*.json")):
         connected_accounts.append("google_workspace")
 
@@ -612,6 +634,64 @@ async def automations_context(request: Request) -> JSONResponse:
         "operator_name": operator.get("name"),
         "timezone": operator.get("timezone"),
     })
+
+
+@router.get("/{automation_id}/webhook-url")
+async def get_webhook_url(automation_id: str, request: Request) -> JSONResponse:
+    """Get the webhook URL for a webhook-triggered automation."""
+    record = _get_n8n_automation(automation_id)
+    if not record:
+        return JSONResponse({"error": "Not found"}, status_code=404)
+
+    # Check trigger_config for cached webhook info
+    trigger_config = record.get("trigger_config")
+    if trigger_config and isinstance(trigger_config, str):
+        try:
+            trigger_config = json.loads(trigger_config)
+        except (json.JSONDecodeError, TypeError):
+            trigger_config = {}
+
+    if isinstance(trigger_config, dict) and trigger_config.get("webhook_path"):
+        return JSONResponse({
+            "webhook_url": f"http://localhost:5678/webhook/{trigger_config['webhook_path']}",
+            "method": trigger_config.get("method", "POST"),
+        })
+
+    # If no cached info, check n8n directly
+    n8n_wf_id = record.get("n8n_workflow_id")
+    if not n8n_wf_id:
+        return JSONResponse({"error": "No webhook configured", "webhook_url": None})
+
+    n8n_client = getattr(request.app.state, "n8n_client", None)
+    if not n8n_client:
+        return JSONResponse({"error": "n8n not available", "webhook_url": None})
+
+    try:
+        workflow = await n8n_client.get_workflow(n8n_wf_id)
+        nodes = workflow.get("nodes", [])
+        for node in nodes:
+            if node.get("type") == "n8n-nodes-base.webhook":
+                path = node.get("parameters", {}).get("path", "")
+                method = node.get("parameters", {}).get("httpMethod", "POST")
+                # Cache it in trigger_config for next time
+                try:
+                    conn = _get_db()
+                    conn.execute(
+                        "UPDATE automations SET trigger_config = ? WHERE id = ?",
+                        (json.dumps({"webhook_path": path, "method": method}), automation_id),
+                    )
+                    conn.commit()
+                    conn.close()
+                except Exception:
+                    pass
+                return JSONResponse({
+                    "webhook_url": f"http://localhost:5678/webhook/{path}",
+                    "method": method,
+                })
+        return JSONResponse({"error": "No webhook node found", "webhook_url": None})
+    except Exception as e:
+        logger.exception("Failed to get webhook URL")
+        return JSONResponse({"error": str(e), "webhook_url": None})
 
 
 @router.get("/health")
@@ -954,17 +1034,41 @@ async def update_workflow(automation_id: str, request: Request) -> JSONResponse:
     try:
         result = await n8n_client.update_workflow(auto["n8n_workflow_id"], body)
 
-        # Update name in qareen.db if changed
+        # Update name + snapshot in qareen.db
+        conn = _get_db()
         new_name = body.get("name")
+        snapshot = json.dumps(body)
         if new_name:
-            conn = _get_db()
-            conn.execute("UPDATE automations SET name = ? WHERE id = ?", (new_name, automation_id))
-            conn.commit()
-            conn.close()
+            conn.execute(
+                "UPDATE automations SET name = ?, workflow_snapshot = ? WHERE id = ?",
+                (new_name, snapshot, automation_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE automations SET workflow_snapshot = ? WHERE id = ?",
+                (snapshot, automation_id),
+            )
+        conn.commit()
+        conn.close()
 
         return JSONResponse(result)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
+
+
+@router.get("/{automation_id}/snapshot")
+async def get_snapshot(automation_id: str, request: Request) -> JSONResponse:
+    """Return the last saved workflow snapshot for restore."""
+    auto = _get_n8n_automation(automation_id)
+    if not auto:
+        return JSONResponse({"error": "not found"}, status_code=404)
+    raw = auto.get("workflow_snapshot")
+    if not raw:
+        return JSONResponse({"snapshot": None})
+    try:
+        return JSONResponse({"snapshot": json.loads(raw)})
+    except (json.JSONDecodeError, TypeError):
+        return JSONResponse({"snapshot": None})
 
 
 @router.get("/{automation_id}/executions")

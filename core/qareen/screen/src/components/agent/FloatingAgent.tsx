@@ -247,7 +247,8 @@ export default function FloatingAgent() {
   const hasEntries = entries.length > 0 || isPending
 
   // Don't show on Companion page
-  if (location.pathname === '/') return null
+  // Hide on home and companion session pages
+  if (location.pathname === '/' || location.pathname.startsWith('/companion/session')) return null
 
   const contextLabel = pageCtx
     ? pageCtx.detail

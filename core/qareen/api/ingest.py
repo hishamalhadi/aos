@@ -8,9 +8,9 @@ Endpoints:
     POST   /api/activity            — log an agent action
     PATCH  /api/activity/{id}       — update an existing activity
     GET    /api/activity             — get recent activity
-    POST   /api/conversations       — log a message exchange
-    PATCH  /api/conversations/{id}  — update a conversation with response
-    GET    /api/conversations       — get recent conversations
+    POST   /api/ingest/conversations       — log a message exchange
+    PATCH  /api/ingest/conversations/{id}  — update a conversation with response
+    GET    /api/ingest/conversations       — get recent conversations
     POST   /api/work/notify         — push a work event to SSE subscribers
     POST   /api/sessions/hook       — handle Claude Code session lifecycle
     GET    /api/sessions            — list Claude Code sessions
@@ -191,7 +191,7 @@ async def get_activity(limit: int = 50, agent: str | None = None):
 # Conversations
 # ---------------------------------------------------------------------------
 
-@router.post("/api/conversations")
+@router.post("/api/ingest/conversations")
 async def log_conversation(request: Request):
     """Log a conversation exchange. Returns the conversation ID."""
     body = await request.json()
@@ -218,7 +218,7 @@ async def log_conversation(request: Request):
     return {"id": cid}
 
 
-@router.patch("/api/conversations/{conv_id}")
+@router.patch("/api/ingest/conversations/{conv_id}")
 async def update_conversation(conv_id: int, request: Request):
     """Update a conversation with the response."""
     body = await request.json()
@@ -233,7 +233,7 @@ async def update_conversation(conv_id: int, request: Request):
     return {"ok": True}
 
 
-@router.get("/api/conversations")
+@router.get("/api/ingest/conversations")
 async def get_conversations(limit: int = 50, agent: str | None = None):
     """Get recent conversations."""
     with _db() as conn:

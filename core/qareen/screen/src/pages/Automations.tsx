@@ -7,7 +7,7 @@ import {
   X, Check, Clock, AlertCircle, Trash2,
   Pause, Send, Loader2, Sparkles, ArrowRight,
   MessageCircle, Mail, Sheet, Rss, Webhook,
-  Calendar, Globe, History, Archive,
+  Calendar, Globe, History, Archive, Copy,
 } from 'lucide-react';
 import { Tag, StatusDot, type StatusDotColor } from '@/components/primitives';
 import {
@@ -403,6 +403,44 @@ function ExecutionHistoryPanel({ automationId }: { automationId: string }) {
   );
 }
 
+function WebhookUrlBadge({ automationId }: { automationId: string }) {
+  const { data } = useQuery({
+    queryKey: ['webhook-url', automationId],
+    queryFn: async () => {
+      const res = await fetch(`/api/automations/${automationId}/webhook-url`);
+      return res.json();
+    },
+    staleTime: 60_000,
+  });
+  const [copied, setCopied] = useState(false);
+
+  if (!data?.webhook_url) return null;
+
+  const handleCopy = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(data.webhook_url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
+
+  return (
+    <div
+      className="flex items-center gap-2 mb-3 px-2.5 py-1.5 rounded-[7px] bg-bg-tertiary border border-border"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Webhook className="w-3.5 h-3.5 text-accent shrink-0" />
+      <span className="text-[11px] text-text-tertiary truncate flex-1 font-mono select-all">{data.webhook_url}</span>
+      <span className="text-[9px] text-text-quaternary uppercase shrink-0">{data.method}</span>
+      <button
+        onClick={handleCopy}
+        className="shrink-0 w-5 h-5 flex items-center justify-center rounded-[3px] text-text-quaternary hover:text-accent transition-colors cursor-pointer"
+      >
+        {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+      </button>
+    </div>
+  );
+}
+
 function N8nAutomationCard({
   automation,
   onView,
@@ -515,6 +553,11 @@ function N8nAutomationCard({
           </>
         )}
       </div>
+
+      {/* Webhook URL (only shown for webhook triggers) */}
+      {automation.trigger_type === 'webhook' && (
+        <WebhookUrlBadge automationId={automation.id} />
+      )}
 
       {/* Description */}
       <p className="text-[12px] text-text-quaternary leading-relaxed line-clamp-2">

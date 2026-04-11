@@ -47,7 +47,7 @@ def log_conversation(user_key: str, agent: str = None, topic_name: str = None,
                      duration_ms: int = None, message_type: str = "text") -> int | None:
     """Log a conversation exchange. Returns conversation ID or None."""
     try:
-        r = httpx.post(f"{QAREEN_URL}/api/conversations", json={
+        r = httpx.post(f"{QAREEN_URL}/api/ingest/conversations", json={
             "channel": "telegram",
             "user_key": user_key,
             "agent": agent,
@@ -68,7 +68,7 @@ def update_conversation(conv_id: int, response: str, duration_ms: int = None):
     if conv_id is None:
         return
     try:
-        httpx.patch(f"{QAREEN_URL}/api/conversations/{conv_id}", json={
+        httpx.patch(f"{QAREEN_URL}/api/ingest/conversations/{conv_id}", json={
             "response": response,
             "duration_ms": duration_ms,
         }, timeout=5)

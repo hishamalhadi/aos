@@ -12,7 +12,7 @@ import { format } from 'date-fns'
 // SessionDetail — review a completed session.
 //
 // Route: /sessions/:id
-// Data: /companion/meetings/:id
+// Data: /companion/session/:id
 // ---------------------------------------------------------------------------
 
 interface TranscriptBlock {
@@ -78,7 +78,7 @@ export default function SessionDetail() {
   useEffect(() => {
     if (!id) return
     let cancelled = false
-    fetch(`/companion/meetings/${id}`)
+    fetch(`/companion/session/${id}`)
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() })
       .then(d => { if (!cancelled) { setData(d); setError(null) } })
       .catch(e => { if (!cancelled) setError(String(e)) })
@@ -150,7 +150,7 @@ export default function SessionDetail() {
         {/* Audio player — compact, no label */}
         {hasAudio && (
           <div className="mb-8">
-            <AudioPlayer src={`/companion/meetings/${data.id}/audio`} />
+            <AudioPlayer src={`/companion/session/${data.id}/audio`} />
           </div>
         )}
 

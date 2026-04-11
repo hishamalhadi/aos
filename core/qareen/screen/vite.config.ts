@@ -52,10 +52,6 @@ export default defineConfig({
           });
         },
       },
-      '/companion/meetings': {
-        target: API_TARGET,
-        changeOrigin: true,
-      },
       '/companion': {
         target: API_TARGET,
         changeOrigin: true,
